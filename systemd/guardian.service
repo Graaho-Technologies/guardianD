@@ -1,0 +1,38 @@
+[Unit]
+Description=GuardianD — EC2 Instance Observability Daemon
+Documentation=https://github.com/Graaho-Technologies/guardianD
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/guardiand --config /etc/guardian/guardian.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=5
+
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/guardian/guardian.env
+
+LimitNOFILE=65536
+LimitNPROC=512
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardiand
+
+ProtectSystem=false
+ProtectHome=read-only
+NoNewPrivileges=false
+
+PIDFile=/var/run/guardian/guardian.pid
+RuntimeDirectory=guardian
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

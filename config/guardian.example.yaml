@@ -1,0 +1,89 @@
+# GuardianD Configuration
+# All secrets can be overridden with environment variables (see comments per field)
+
+instance_name: "prod-api-01"
+environment: "production"
+
+collector:
+  interval_seconds: 10
+  process_top_n: 10
+  ec2_imds_timeout: 2
+  spot_interruption_check: true
+
+thresholds:
+  cpu_warn: 80.0
+  cpu_critical: 95.0
+  cpu_steal_warn: 10.0
+  cpu_steal_critical: 20.0
+  memory_warn: 80.0
+  memory_critical: 92.0
+  swap_warn: 50.0
+  swap_critical: 80.0
+  load_avg_warn_multiplier: 2.0
+  load_avg_critical_multiplier: 4.0
+  disk_warn: 85.0
+  disk_critical: 95.0
+  disk_await_warn_ms: 100.0
+  disk_await_critical_ms: 500.0
+  tcp_close_wait_warn: 100
+  tcp_close_wait_critical: 500
+  network_error_rate_warn: 0.1
+  oom_kills_critical: 1
+
+alerts:
+  cooldown_seconds: 300
+  escalation_minutes: 15
+  recovery_notifications: true
+  group_alerts: true
+
+  slack:
+    enabled: false
+    # Env override: GUARDIAN_SLACK_WEBHOOK
+    webhook_url: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+    channel: "#ops-alerts"
+    username: "GuardianD"
+    icon_emoji: ":shield:"
+    min_severity: "WARN"
+
+  telegram:
+    enabled: false
+    # Env override: GUARDIAN_TELEGRAM_TOKEN
+    bot_token: "YOUR_BOT_TOKEN"
+    # Env override: GUARDIAN_TELEGRAM_CHAT_ID
+    chat_id: "YOUR_CHAT_ID"
+    min_severity: "WARN"
+
+  email:
+    enabled: false
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    smtp_user: "alerts@yourcompany.com"
+    # Env override: GUARDIAN_EMAIL_PASSWORD
+    smtp_password: "YOUR_APP_PASSWORD"
+    from_addr: "GuardianD <alerts@yourcompany.com>"
+    to_addrs:
+      - "oncall@yourcompany.com"
+    use_tls: true
+    min_severity: "CRITICAL"
+
+  webhook:
+    enabled: false
+    url: "https://your-webhook-endpoint.com/guardian"
+    secret: ""
+    min_severity: "CRITICAL"
+
+app_health_checks: []
+
+storage:
+  log_dir: "/var/log/guardian"
+  db_path: "/var/lib/guardian/metrics.db"
+  log_rotation_mb: 50
+  log_retention_days: 30
+  metric_retention_days: 7
+
+api:
+  enabled: true
+  host: "127.0.0.1"
+  port: 9731
+  # Env override: GUARDIAN_API_TOKEN
+  auth_token: ""

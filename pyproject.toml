@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guardiand"
+version = "0.1.0"
+description = "Production-grade EC2 instance observability daemon"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "Mobasshir Bhuiya Shagor" }]
+
+dependencies = [
+    "psutil>=5.9.0",
+    "requests>=2.28.0",
+    "PyYAML>=6.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "tabulate>=0.9.0",
+    "python-dateutil>=2.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "pytest-mock",
+    "black",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+guardiand = "guardian.main:cli_entry"
+guardianctl = "guardianctl.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["guardian*", "guardianctl*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
