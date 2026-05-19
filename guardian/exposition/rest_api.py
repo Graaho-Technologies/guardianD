@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socketserver
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -40,6 +41,11 @@ def _dataclass_to_dict(obj: Any) -> Any:
     return obj
 
 
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 class _Handler(BaseHTTPRequestHandler):
     server: "RestAPIServer"  # type: ignore[assignment]
 
@@ -57,7 +63,6 @@ class _Handler(BaseHTTPRequestHandler):
     def _check_auth(self) -> bool:
         token = self.server.api_config.auth_token
         if not token:
-            # No auth token set — only allow localhost
             client_ip = self.client_address[0]
             if client_ip not in ("127.0.0.1", "::1"):
                 self._json_response({"error": "forbidden"}, 403)
@@ -70,12 +75,24 @@ class _Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self) -> None:
-        if not self._check_auth():
-            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         qs = parse_qs(parsed.query)
         daemon = self.server.daemon_ref
+
+        # Health/ready endpoints bypass auth
+        if path == "/-/healthy":
+            self._json_response({"status": "ok"})
+            return
+        if path == "/-/ready":
+            if daemon._last_collection_ts > 0:
+                self._json_response({"status": "ready"})
+            else:
+                self._json_response({"status": "not ready"}, 503)
+            return
+
+        if not self._check_auth():
+            return
 
         if path == "/api/v1/status":
             self._handle_status(daemon)
@@ -92,6 +109,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_alerts(daemon, qs)
         elif path == "/api/v1/health-checks":
             self._handle_health_checks(daemon)
+        elif path == "/api/v1/intelligence/baselines":
+            self._handle_intelligence_baselines(daemon, qs)
+        elif path == "/api/v1/intelligence/anomalies":
+            self._handle_intelligence_anomalies(daemon, qs)
         elif path == "/api/v1/config":
             self._handle_config(daemon)
         else:
@@ -123,12 +144,23 @@ class _Handler(BaseHTTPRequestHandler):
                 "name": snap_name,
                 "last_collected": snap.timestamp,
                 "status": snap.status,
+                "duration_ms": snap.collection_duration_ms,
             })
         uptime = time.time() - daemon._start_time
         ec2_snap = (daemon._last_snapshots or {}).get("ec2", None)
         instance_id = ec2_snap.metrics.get("instance_id", "") if ec2_snap and ec2_snap.metrics else ""
 
         active_alerts = list(daemon.router._active.values()) if daemon.router else []
+
+        intel_info: Dict[str, Any] = {}
+        baseline = getattr(daemon, "baseline_engine", None)
+        if baseline is not None:
+            intel_info["enabled"] = True
+            intel_info["warming_up"] = baseline.is_warming_up()
+        else:
+            intel_info["enabled"] = False
+
+        prom_cfg = daemon.config.prometheus
         self._json_response({
             "status": "running",
             "uptime_seconds": uptime,
@@ -139,6 +171,12 @@ class _Handler(BaseHTTPRequestHandler):
             "collectors": collectors_info,
             "last_collection_ts": daemon._last_collection_ts,
             "active_alert_count": len(active_alerts),
+            "intelligence": intel_info,
+            "prometheus": {
+                "enabled": prom_cfg.enabled,
+                "port": prom_cfg.port,
+                "host": prom_cfg.host,
+            },
         })
 
     def _handle_metrics(self, daemon: Any) -> None:
@@ -233,6 +271,41 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._json_response({"checks": [], "healthy_count": 0, "unhealthy_count": 0, "total_count": 0})
 
+    def _handle_intelligence_baselines(self, daemon: Any, qs: Dict) -> None:
+        baseline = getattr(daemon, "baseline_engine", None)
+        if baseline is None:
+            self._json_response({"error": "intelligence not enabled"}, 503)
+            return
+        collector = (qs.get("collector") or [None])[0]
+        metric = (qs.get("metric") or [None])[0]
+        if collector and metric:
+            stats = baseline.get_stats(collector, metric)
+            self._json_response({"collector": collector, "metric": metric, "stats": stats})
+        elif collector:
+            results = {}
+            for key, deque_obj in baseline._windows.items():
+                c, m = key.split(":", 1)
+                if c == collector:
+                    stats = baseline.get_stats(c, m)
+                    if stats:
+                        results[m] = stats
+            self._json_response({"collector": collector, "baselines": results})
+        else:
+            summary = []
+            for key in baseline._windows:
+                c, m = key.split(":", 1)
+                stats = baseline.get_stats(c, m)
+                if stats:
+                    summary.append({"collector": c, "metric": m, **stats})
+            self._json_response({"baselines": summary})
+
+    def _handle_intelligence_anomalies(self, daemon: Any, qs: Dict) -> None:
+        since_str = (qs.get("since") or [None])[0]
+        since = float(since_str) if since_str else time.time() - 3600
+        rows = daemon.store.query_alerts(since, time.time(), limit=200)
+        anomalies = [r for r in rows if r.get("category") == "intelligence"]
+        self._json_response({"anomalies": anomalies, "total": len(anomalies)})
+
     def _handle_reload(self) -> None:
         os.kill(os.getpid(), signal.SIGHUP)
         self._json_response({"status": "reloading"})
@@ -247,14 +320,14 @@ class RestAPIServer:
     def __init__(self, config: APIConfig, daemon_ref: Any) -> None:
         self.api_config = config
         self.daemon_ref = daemon_ref
-        self._server: Optional[HTTPServer] = None
+        self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
     def start_background(self) -> None:
         if not self.api_config.enabled:
             return
         try:
-            self._server = HTTPServer((self.api_config.host, self.api_config.port), _Handler)
+            self._server = ThreadingHTTPServer((self.api_config.host, self.api_config.port), _Handler)
             self._server.api_config = self.api_config  # type: ignore[attr-defined]
             self._server.daemon_ref = self.daemon_ref  # type: ignore[attr-defined]
             self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="guardian-api")
