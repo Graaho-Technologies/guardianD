@@ -22,13 +22,25 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+intelligence = [
+    "numpy>=1.24.0",
+]
+prometheus = [
+    "prometheus-client>=0.17.0",
+]
+full = [
+    "numpy>=1.24.0",
+    "prometheus-client>=0.17.0",
+]
 dev = [
     "pytest>=7.0",
-    "pytest-cov",
-    "pytest-mock",
-    "black",
-    "ruff",
-    "mypy",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.10",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+    "numpy>=1.24.0",
+    "prometheus-client>=0.17.0",
 ]
 
 [project.scripts]

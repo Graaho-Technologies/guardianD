@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 import time
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import psutil
 
@@ -12,9 +12,11 @@ from .base import BaseCollector, MetricSnapshot
 
 _log = get_logger(__name__)
 
-_OOM_RE = re.compile(r"Out of memory: Kill process (\d+) \(([^)]+)\)")
-_DMESG_LEVEL_RE = re.compile(r"<(\d+)>")
-_LEVEL_MAP = {"0": "emerg", "1": "alert", "2": "crit", "3": "err", "4": "warn", "5": "notice"}
+_OOM_RE = re.compile(r"Kill(?:ed)? process (\d+) \(([^)]+)\).*?(\d+) kB", re.DOTALL)
+_LEVEL_MAP = {
+    "0": "emerg", "1": "alert", "2": "crit",
+    "3": "err", "4": "warn", "5": "notice",
+}
 
 
 def _run(cmd: List[str], timeout: int = 10) -> str:
@@ -26,24 +28,74 @@ def _run(cmd: List[str], timeout: int = 10) -> str:
         return ""
 
 
+def _parse_psi(resource: str) -> Dict[str, Dict[str, float]]:
+    """Parse /proc/pressure/{resource}. Returns {} on FileNotFoundError."""
+    result: Dict[str, Dict[str, float]] = {}
+    try:
+        with open(f"/proc/pressure/{resource}", "r") as f:
+            for line in f:
+                parts = line.split()
+                if not parts:
+                    continue
+                kind = parts[0]  # "some" or "full"
+                vals: Dict[str, float] = {}
+                for kv in parts[1:]:
+                    if "=" in kv:
+                        k, v = kv.split("=", 1)
+                        try:
+                            vals[k] = float(v)
+                        except ValueError:
+                            pass
+                result[kind] = vals
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    return result
+
+
+def _build_psi_section(resource: str, has_full: bool) -> Dict:
+    data = _parse_psi(resource)
+    some = data.get("some", {})
+    full = data.get("full", {})
+    section: Dict = {
+        "some_avg10": some.get("avg10", -1.0),
+        "some_avg60": some.get("avg60", -1.0),
+        "some_avg300": some.get("avg300", -1.0),
+        "some_total_us": int(some.get("total", -1)),
+    }
+    if has_full:
+        section.update({
+            "full_avg10": full.get("avg10", -1.0),
+            "full_avg60": full.get("avg60", -1.0),
+            "full_avg300": full.get("avg300", -1.0),
+            "full_total_us": int(full.get("total", -1)),
+        })
+    return section
+
+
 class SystemEventsCollector(BaseCollector):
     name = "system_events"
 
     def __init__(self) -> None:
+        self._seen_dmesg: Set[Tuple] = set()
         self._seen_ooms: Set[Tuple[float, int]] = set()
-        self._prev_oom_count: int = 0
+        self._first_collection: bool = True
+        self._psi_unavailable_logged: bool = False
 
     def collect(self) -> MetricSnapshot:
         ts = time.time()
         try:
-            dmesg_out = _run(["dmesg", "--level=err,warn,crit,alert,emerg", "--time-format=iso", "-T"])
-            dmesg_errors: List[Dict] = []
-            oom_kills: List[Dict] = []
+            dmesg_out = _run(
+                ["dmesg", "--level=warn,err,crit,alert,emerg", "--time-format=iso", "--nopager"],
+                timeout=5,
+            )
+            all_dmesg: List[Dict] = []
+            oom_kills_new: List[Dict] = []
+            new_oom_count = 0
 
-            for line in dmesg_out.splitlines()[-200:]:
+            for line in dmesg_out.splitlines():
                 try:
-                    # parse ISO timestamp from dmesg -T --time-format=iso
-                    # format: [2024-01-15T14:32:10,123456+00:00] message
                     msg_ts = 0.0
                     message = line
                     bracket_match = re.match(r"\[([^\]]+)\]\s*(.*)", line)
@@ -51,44 +103,71 @@ class SystemEventsCollector(BaseCollector):
                         ts_str = bracket_match.group(1)
                         message = bracket_match.group(2)
                         try:
-                            from datetime import datetime, timezone
-                            msg_ts = datetime.fromisoformat(ts_str.replace(",", ".")).timestamp()
+                            from datetime import datetime
+                            msg_ts = datetime.fromisoformat(
+                                ts_str.replace(",", ".")
+                            ).timestamp()
                         except Exception:
                             msg_ts = 0.0
 
-                    level = "err"
-                    level_match = _DMESG_LEVEL_RE.match(message)
+                    # Infer level from message prefix <N>
+                    level = "warn"
+                    level_match = re.match(r"<(\d+)>", message)
                     if level_match:
                         level = _LEVEL_MAP.get(level_match.group(1), "err")
                         message = message[level_match.end():].strip()
 
-                    dmesg_errors.append({"timestamp": msg_ts, "level": level, "message": message[:300]})
+                    entry = {"timestamp": msg_ts, "level": level, "message": message[:300]}
+                    all_dmesg.append(entry)
 
                     oom_match = _OOM_RE.search(line)
                     if oom_match:
                         pid = int(oom_match.group(1))
                         proc_name = oom_match.group(2)
+                        pages_freed = int(oom_match.group(3))
                         key = (msg_ts, pid)
-                        oom_kills.append({"timestamp": msg_ts, "process_name": proc_name, "pid": pid, "message": message[:300]})
+                        if key not in self._seen_ooms:
+                            self._seen_ooms.add(key)
+                            if not self._first_collection:
+                                new_oom_count += 1
+                                oom_kills_new.append({
+                                    "timestamp": msg_ts,
+                                    "process_name": proc_name,
+                                    "pid": pid,
+                                    "pages_freed": pages_freed,
+                                    "message": message[:300],
+                                })
                 except Exception:
                     continue
 
-            dmesg_errors = dmesg_errors[-50:]
-
-            # OOM kills since last cycle
-            new_oom_count = 0
-            for oom in oom_kills:
-                key = (oom["timestamp"], oom["pid"])
-                if key not in self._seen_ooms:
-                    new_oom_count += 1
-                    self._seen_ooms.add(key)
-            # Keep seen set bounded
+            # Bound OOM seen set
             if len(self._seen_ooms) > 1000:
                 self._seen_ooms = set(list(self._seen_ooms)[-500:])
 
+            # dmesg dedup — seed on first collection so old messages don't re-alert
+            dmesg_errors_new: List[Dict] = []
+            dmesg_error_count_new = 0
+            for entry in all_dmesg:
+                key = (entry["timestamp"], entry["message"][:50])
+                if key not in self._seen_dmesg:
+                    self._seen_dmesg.add(key)
+                    if not self._first_collection:
+                        dmesg_errors_new.append(entry)
+                        dmesg_error_count_new += 1
+
+            if len(self._seen_dmesg) > 5000:
+                # Keep only the most recent half to bound memory
+                items = list(self._seen_dmesg)
+                self._seen_dmesg = set(items[len(items) // 2:])
+
+            if self._first_collection:
+                self._first_collection = False
+
             # Systemd failed units
             failed_units: List[Dict] = []
-            systemctl_out = _run(["systemctl", "--failed", "--no-legend", "--plain"])
+            systemctl_out = _run(
+                ["systemctl", "--failed", "--no-legend", "--plain"], timeout=5
+            )
             for line in systemctl_out.splitlines():
                 parts = line.split(None, 4)
                 if len(parts) >= 4:
@@ -100,22 +179,52 @@ class SystemEventsCollector(BaseCollector):
                         "description": parts[4] if len(parts) > 4 else "",
                     })
 
-            # Kernel version
+            # PSI
+            psi_available = False
+            psi: Dict = {}
+            try:
+                cpu_raw = _parse_psi("cpu")
+                if cpu_raw:
+                    psi_available = True
+                    psi = {
+                        "cpu": _build_psi_section("cpu", has_full=False),
+                        "memory": _build_psi_section("memory", has_full=True),
+                        "io": _build_psi_section("io", has_full=True),
+                    }
+                else:
+                    if not self._psi_unavailable_logged:
+                        _log.info("PSI not available. Kernel 4.20+ required.")
+                        self._psi_unavailable_logged = True
+                    psi = _empty_psi()
+            except Exception:
+                psi = _empty_psi()
+
             kernel_version = _run(["uname", "-r"]).strip()
             boot_time = psutil.boot_time()
             uptime_seconds = time.time() - boot_time
 
             metrics = {
-                "dmesg_errors": dmesg_errors,
-                "oom_kills": oom_kills[-20:],
+                "dmesg_errors_new": dmesg_errors_new,
+                "dmesg_error_count_new": dmesg_error_count_new,
+                "oom_kills_new": oom_kills_new,
                 "oom_kill_count_new": new_oom_count,
                 "failed_systemd_units": failed_units,
+                "failed_unit_count": len(failed_units),
+                "psi_available": psi_available,
+                "psi": psi,
                 "kernel_version": kernel_version,
                 "uptime_seconds": uptime_seconds,
                 "boot_time": boot_time,
-                "last_reboot_reason": "",
             }
             return MetricSnapshot(collector_name=self.name, timestamp=ts, metrics=metrics)
         except Exception as exc:
             _log.error("system_events collect error: %s", exc)
-            return MetricSnapshot(collector_name=self.name, timestamp=ts, metrics={}, status="error", error=str(exc))
+            return MetricSnapshot(
+                collector_name=self.name, timestamp=ts, metrics={}, status="error", error=str(exc)
+            )
+
+
+def _empty_psi() -> Dict:
+    _neg = {"some_avg10": -1.0, "some_avg60": -1.0, "some_avg300": -1.0, "some_total_us": -1}
+    _neg_full = {**_neg, "full_avg10": -1.0, "full_avg60": -1.0, "full_avg300": -1.0, "full_total_us": -1}
+    return {"cpu": dict(_neg), "memory": dict(_neg_full), "io": dict(_neg_full)}
