@@ -30,6 +30,7 @@ class SlackAlerter(BaseAlerter):
 
     def __init__(self, config: SlackConfig) -> None:
         self.config = config
+        self.min_severity = config.min_severity
 
     def is_enabled(self) -> bool:
         return self.config.enabled
@@ -37,7 +38,7 @@ class SlackAlerter(BaseAlerter):
     def send(self, alert: Alert) -> bool:
         if not self.config.enabled:
             return False
-        if not self.meets_severity_threshold(alert, self.config.min_severity):
+        if not self.meets_severity_threshold(alert):
             return False
         try:
             emoji = _EMOJIS.get(alert.severity, ":bell:")

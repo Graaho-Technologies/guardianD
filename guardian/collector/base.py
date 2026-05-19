@@ -12,6 +12,7 @@ class MetricSnapshot:
     metrics: dict  # type: ignore[type-arg]
     status: str = "ok"
     error: str = ""
+    collection_duration_ms: float = 0.0
 
 
 class BaseCollector(ABC):

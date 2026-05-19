@@ -3,8 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import time
-from dataclasses import asdict
+from datetime import datetime, timezone
 
 import requests
 
@@ -20,6 +19,7 @@ class WebhookAlerter(BaseAlerter):
 
     def __init__(self, config: WebhookConfig) -> None:
         self.config = config
+        self.min_severity = config.min_severity
 
     def is_enabled(self) -> bool:
         return self.config.enabled
@@ -27,9 +27,10 @@ class WebhookAlerter(BaseAlerter):
     def send(self, alert: Alert) -> bool:
         if not self.config.enabled:
             return False
-        if not self.meets_severity_threshold(alert, self.config.min_severity):
+        if not self.meets_severity_threshold(alert):
             return False
         try:
+            ts_iso = datetime.fromtimestamp(alert.timestamp, tz=timezone.utc).isoformat()
             payload = {
                 "id": alert.id,
                 "severity": alert.severity.name,
@@ -41,12 +42,16 @@ class WebhookAlerter(BaseAlerter):
                 "instance_name": alert.instance_name,
                 "environment": alert.environment,
                 "timestamp": alert.timestamp,
+                "timestamp_iso": ts_iso,
+                "is_recovery": alert.is_recovery,
                 "fingerprint": alert.fingerprint,
             }
             body = json.dumps(payload)
             headers = {"Content-Type": "application/json"}
             if self.config.secret:
-                sig = hmac.new(self.config.secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+                sig = hmac.new(
+                    self.config.secret.encode(), body.encode(), hashlib.sha256
+                ).hexdigest()
                 headers["X-Guardian-Signature"] = f"sha256={sig}"
 
             resp = requests.post(self.config.url, data=body, headers=headers, timeout=10)
