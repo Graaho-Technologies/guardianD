@@ -1,6 +1,6 @@
-include README.md
 include LICENSE
-include CLAUDE.md
-recursive-include config *.yaml
-recursive-include systemd *.service
+include README.md
+include config/guardian.example.yaml
+include systemd/guardian.service
+include grafana/dashboard.json
 recursive-include scripts *.sh

@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from guardian.alerter.base import Alert, AlertSeverity
+from guardian.alerter.base import Alert, AlertSeverity, make_fingerprint
 from guardian.collector.base import MetricSnapshot
 from guardian.config.schema import (
     AlertConfig,
@@ -41,7 +41,9 @@ def make_alert(
     severity: AlertSeverity = AlertSeverity.WARN,
     category: str = "cpu",
     title: str = "Test Alert",
+    config: GuardianConfig = None,
 ) -> Alert:
+    cfg = config or GuardianConfig()
     return Alert(
         id=str(uuid.uuid4()),
         severity=severity,
@@ -50,16 +52,43 @@ def make_alert(
         message="Test alert message",
         metrics={"test_metric": 42},
         instance_id="i-test",
-        instance_name="test-host",
-        environment="test",
+        instance_name=cfg.instance_name or "test-host",
+        environment=cfg.environment or "test",
         timestamp=time.time(),
-        fingerprint="testfingerprint",
+        fingerprint=make_fingerprint(category, title),
     )
 
 
 @pytest.fixture
 def guardian_config() -> GuardianConfig:
     return make_config()
+
+
+@pytest.fixture
+def basic_config() -> GuardianConfig:
+    config = GuardianConfig()
+    config.instance_name = "test-instance"
+    config.environment = "test"
+    config.alerts.recovery_notifications = False
+    return config
+
+
+@pytest.fixture
+def full_config(tmp_path) -> GuardianConfig:
+    config = GuardianConfig()
+    config.storage.db_path = str(tmp_path / "test.db")
+    config.storage.log_dir = str(tmp_path / "logs")
+    config.alerts.slack.enabled = True
+    config.alerts.slack.webhook_url = "https://hooks.slack.com/fake"
+    config.alerts.telegram.enabled = True
+    config.alerts.telegram.bot_token = "fake_token"
+    config.alerts.telegram.chat_id = "12345"
+    config.alerts.email.enabled = True
+    config.alerts.email.smtp_user = "test@example.com"
+    config.alerts.email.smtp_password = "fake"
+    config.alerts.email.from_addr = "test@example.com"
+    config.alerts.email.to_addrs = ["dest@example.com"]
+    return config
 
 
 @pytest.fixture

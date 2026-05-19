@@ -1,89 +1,470 @@
-# GuardianD Configuration
-# All secrets can be overridden with environment variables (see comments per field)
+# ============================================================
+# GuardianD Configuration — guardian.example.yaml
+# All secrets can be overridden with environment variables.
+# See per-field comments for the ENV var name.
+# Copy this file to /etc/guardian/guardian.yaml and edit.
+# ============================================================
 
+# Name of this EC2 instance (used in alert messages and metric labels)
 instance_name: "prod-api-01"
+
+# Deployment environment label (e.g. production, staging, dev)
+# Env: GUARDIAN_ENVIRONMENT
 environment: "production"
 
+# ------------------------------------------------------------
+# Collector settings — control how often metrics are gathered
+# ------------------------------------------------------------
 collector:
+  # Seconds between collection cycles (minimum 5)
   interval_seconds: 10
+
+  # Number of processes to track in top-CPU and top-memory lists
   process_top_n: 10
+
+  # Seconds to wait for EC2 Instance Metadata Service (IMDS) response
+  # Keep low — on non-EC2 hosts a timeout here short-circuits EC2 detection
   ec2_imds_timeout: 2
+
+  # Check for spot instance termination notice each cycle
+  # Sends EMERGENCY alert with ~2-minute warning before forced stop
   spot_interruption_check: true
 
+  # Primary DNS host for latency check (AWS VPC resolver — fastest on EC2)
+  dns_check_host: "169.254.169.253"
+
+  # Fallback DNS host used if primary is unreachable
+  dns_check_fallback: "8.8.8.8"
+
+  # Auto-detect disk type (nvme/ebs/hdd/ssd) from /sys/block rotational flag
+  # Used to apply type-aware I/O latency thresholds below
+  disk_type_detection: true
+
+# ------------------------------------------------------------
+# Alert thresholds — tune to your instance size and workload
+# All numeric values are floats unless noted as int.
+# ------------------------------------------------------------
 thresholds:
+
+  # --- CPU ---
+
+  # % overall CPU utilization — WARN
   cpu_warn: 80.0
+
+  # % overall CPU utilization — CRITICAL
   cpu_critical: 95.0
-  cpu_steal_warn: 10.0
-  cpu_steal_critical: 20.0
-  memory_warn: 80.0
-  memory_critical: 92.0
-  swap_warn: 50.0
-  swap_critical: 80.0
+
+  # % CPU steal time — WARN (EC2: >5% is significant on T-series burstable instances)
+  cpu_steal_warn: 5.0
+
+  # % CPU steal time — CRITICAL (hypervisor is heavily over-committing this host)
+  cpu_steal_critical: 15.0
+
+  # % time the CPU spends waiting for disk I/O — WARN
+  cpu_iowait_warn: 40.0
+
+  # % time the CPU spends waiting for disk I/O — CRITICAL
+  cpu_iowait_critical: 60.0
+
+  # Load average / logical CPU count ratio — WARN multiplier
+  # e.g. 2.0 means alert when load > 2x number of cores
   load_avg_warn_multiplier: 2.0
+
+  # Load average / logical CPU count ratio — CRITICAL multiplier
   load_avg_critical_multiplier: 4.0
+
+  # --- Memory ---
+
+  # % RAM used — WARN
+  memory_warn: 80.0
+
+  # % RAM used — CRITICAL
+  memory_critical: 92.0
+
+  # % swap space used — WARN
+  swap_warn: 50.0
+
+  # % swap space used — CRITICAL
+  swap_critical: 80.0
+
+  # pages/sec swap-out rate — WARN (active swapping = memory pressure)
+  swap_sout_warn: 10.0
+
+  # pages/sec swap-out rate — CRITICAL
+  swap_sout_critical: 100.0
+
+  # Dirty pages as % of total RAM — WARN (high dirty ratio can cause I/O stalls)
+  dirty_ratio_warn: 10.0
+
+  # Dirty pages as % of total RAM — CRITICAL
+  dirty_ratio_critical: 20.0
+
+  # % of system file-descriptor limit in use — WARN
+  fd_exhaustion_warn: 80.0
+
+  # % of system file-descriptor limit in use — CRITICAL (services will crash at 100%)
+  fd_exhaustion_critical: 95.0
+
+  # --- Disk space ---
+
+  # % disk space used — WARN
   disk_warn: 85.0
+
+  # % disk space used — CRITICAL
   disk_critical: 95.0
-  disk_await_warn_ms: 100.0
-  disk_await_critical_ms: 500.0
-  tcp_close_wait_warn: 100
-  tcp_close_wait_critical: 500
+
+  # % inodes used — WARN (inode exhaustion blocks file creation even with free space)
+  inode_warn: 85.0
+
+  # % inodes used — CRITICAL
+  inode_critical: 95.0
+
+  # --- Disk I/O latency (type-aware) ---
+  # await_ms = average I/O latency in milliseconds per disk type
+  # GuardianD auto-detects disk type when disk_type_detection is enabled
+
+  # SSD (local non-NVMe) — WARN
+  disk_await_ssd_warn_ms: 10.0
+
+  # SSD (local non-NVMe) — CRITICAL
+  disk_await_ssd_critical_ms: 50.0
+
+  # HDD (rotational) — WARN
+  disk_await_hdd_warn_ms: 100.0
+
+  # HDD (rotational) — CRITICAL
+  disk_await_hdd_critical_ms: 500.0
+
+  # EBS volumes attached to EC2 instances — WARN
+  disk_await_ebs_warn_ms: 20.0
+
+  # EBS volumes attached to EC2 instances — CRITICAL
+  disk_await_ebs_critical_ms: 100.0
+
+  # NVMe instance store (e.g. c5d, m5d, i3) — WARN
+  disk_await_nvme_warn_ms: 10.0
+
+  # NVMe instance store — CRITICAL
+  disk_await_nvme_critical_ms: 50.0
+
+  # --- Network ---
+
+  # % network error rate (errors / total packets) — WARN
   network_error_rate_warn: 0.1
+
+  # % network error rate — CRITICAL
+  network_error_rate_critical: 1.0
+
+  # % packet drop rate — WARN
+  network_drop_rate_warn: 0.05
+
+  # % packet drop rate — CRITICAL
+  network_drop_rate_critical: 0.5
+
+  # Number of TCP CLOSE_WAIT connections — WARN (application not closing connections)
+  tcp_close_wait_warn: 100
+
+  # Number of TCP CLOSE_WAIT connections — CRITICAL
+  tcp_close_wait_critical: 500
+
+  # Number of TCP TIME_WAIT connections — WARN
+  tcp_time_wait_warn: 1000
+
+  # Number of TCP SYN_RECV connections — WARN (possible SYN flood / DDoS)
+  tcp_syn_recv_warn: 100
+
+  # --- Process ---
+
+  # Number of zombie processes — WARN
+  zombie_warn: 5
+
+  # Number of zombie processes — CRITICAL
+  zombie_critical: 20
+
+  # Any OOM kill triggers EMERGENCY (int: minimum kill count to alert)
   oom_kills_critical: 1
 
+  # --- PSI (Pressure Stall Information) — requires Linux kernel 4.20+ ---
+  # "some" = at least one task stalled; "full" = ALL tasks stalled (severe)
+  # Values are % of time stalled over the avg10 (10-second) window
+
+  # % time at least one task stalled on CPU — WARN
+  psi_cpu_some_warn: 30.0
+
+  # % time at least one task stalled on CPU — CRITICAL
+  psi_cpu_some_critical: 70.0
+
+  # % time at least one task stalled on memory — WARN
+  psi_memory_some_warn: 10.0
+
+  # % time at least one task stalled on memory — CRITICAL
+  psi_memory_some_critical: 30.0
+
+  # % time ALL tasks stalled on memory (severe stall) — WARN
+  psi_memory_full_warn: 5.0
+
+  # % time ALL tasks stalled on memory — CRITICAL
+  psi_memory_full_critical: 15.0
+
+  # % time at least one task stalled on I/O — WARN
+  psi_io_some_warn: 20.0
+
+  # % time at least one task stalled on I/O — CRITICAL
+  psi_io_some_critical: 50.0
+
+  # % time ALL tasks stalled on I/O — WARN
+  psi_io_full_warn: 10.0
+
+  # % time ALL tasks stalled on I/O — CRITICAL
+  psi_io_full_critical: 30.0
+
+  # --- Intelligence / Phase 2 ---
+
+  # Z-score threshold for anomaly detection — WARN (2σ = ~95th percentile deviation)
+  anomaly_zscore_warn: 2.0
+
+  # Z-score threshold for anomaly detection — CRITICAL (3σ = ~99.7th percentile)
+  anomaly_zscore_critical: 3.0
+
+  # % rate-of-change (velocity) spike — WARN
+  # e.g. 40.0 means alert when a metric jumps 40% in one interval
+  velocity_spike_warn_pct: 40.0
+
+  # % rate-of-change spike — CRITICAL
+  velocity_spike_critical_pct: 70.0
+
+  # Disk/memory fill forecast ETA — WARN (hours until predicted full)
+  forecast_disk_full_warn_hours: 8.0
+
+  # Disk/memory fill forecast ETA — CRITICAL (hours until predicted full)
+  forecast_disk_full_critical_hours: 2.0
+
+# ------------------------------------------------------------
+# Alert routing — dedup, cooldown, escalation, and channels
+# ------------------------------------------------------------
 alerts:
+  # Suppress re-alerts for the same condition within this window (seconds)
   cooldown_seconds: 300
+
+  # Escalate a WARN alert to CRITICAL if it persists this long (minutes)
   escalation_minutes: 15
+
+  # Send a recovery notification when an alert condition clears
   recovery_notifications: true
+
+  # Bundle multiple simultaneous alerts into a single message
   group_alerts: true
 
+  # Maximum number of alerts to include in a single grouped dispatch
+  max_alerts_per_dispatch: 10
+
+  # --- Slack ---
   slack:
     enabled: false
-    # Env override: GUARDIAN_SLACK_WEBHOOK
+
+    # Incoming Webhook URL from Slack App settings
+    # Env: GUARDIAN_SLACK_WEBHOOK
     webhook_url: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-    channel: "#ops-alerts"
+
+    # Slack channel to post alerts to
+    channel: "#alerts"
+
+    # Bot display name
     username: "GuardianD"
+
+    # Bot icon emoji
     icon_emoji: ":shield:"
+
+    # Minimum severity to send via this channel (INFO | WARN | CRITICAL | EMERGENCY)
     min_severity: "WARN"
 
+  # --- Telegram ---
   telegram:
     enabled: false
-    # Env override: GUARDIAN_TELEGRAM_TOKEN
+
+    # Telegram Bot API token from BotFather
+    # Env: GUARDIAN_TELEGRAM_TOKEN
     bot_token: "YOUR_BOT_TOKEN"
-    # Env override: GUARDIAN_TELEGRAM_CHAT_ID
+
+    # Telegram chat ID (user, group, or channel) to send alerts to
+    # Env: GUARDIAN_TELEGRAM_CHAT_ID
     chat_id: "YOUR_CHAT_ID"
+
+    # Minimum severity to send via this channel
     min_severity: "WARN"
 
+  # --- Email ---
   email:
     enabled: false
+
+    # SMTP server hostname
     smtp_host: "smtp.gmail.com"
+
+    # SMTP port (587 = STARTTLS, 465 = SSL, 25 = plaintext)
     smtp_port: 587
+
+    # SMTP login username
     smtp_user: "alerts@yourcompany.com"
-    # Env override: GUARDIAN_EMAIL_PASSWORD
+
+    # SMTP login password (use an app-specific password for Gmail)
+    # Env: GUARDIAN_EMAIL_PASSWORD
     smtp_password: "YOUR_APP_PASSWORD"
-    from_addr: "GuardianD <alerts@yourcompany.com>"
+
+    # From address shown in email headers
+    from_addr: "alerts@yourcompany.com"
+
+    # List of recipient email addresses
     to_addrs:
       - "oncall@yourcompany.com"
+
+    # Use STARTTLS for encrypted connection (recommended)
     use_tls: true
+
+    # Minimum severity to send via email (email is typically reserved for CRITICAL+)
     min_severity: "CRITICAL"
 
+  # --- Generic Webhook (PagerDuty / OpsGenie / custom) ---
   webhook:
     enabled: false
-    url: "https://your-webhook-endpoint.com/guardian"
+
+    # Endpoint URL to POST alert payloads to
+    url: "https://your-webhook.com/events"
+
+    # HMAC-SHA256 signing secret (leave empty to disable request signing)
+    # Header sent: X-Guardian-Signature: sha256=<hex>
     secret: ""
+
+    # Minimum severity to send via webhook
     min_severity: "CRITICAL"
 
+# ------------------------------------------------------------
+# Application health checks
+# GuardianD can actively probe your services each interval.
+# ------------------------------------------------------------
 app_health_checks: []
+# Example — uncomment and adapt:
+# app_health_checks:
+#   - name: "api"                          # unique name for this check
+#     type: "http"                         # port | http | process | systemd_service
+#     target: "http://localhost:8080/health"
+#     interval_seconds: 30                 # how often to run this check
+#     timeout_seconds: 5                   # seconds before the check times out
+#     expected_status_code: 200            # for http checks: required HTTP status
+#     critical_on_failure: true            # true = CRITICAL alert; false = WARN alert
+#     headers: {}                          # optional HTTP headers for http checks
+#
+#   - name: "postgres"
+#     type: "port"
+#     target: "localhost:5432"
+#     interval_seconds: 30
+#     timeout_seconds: 3
+#     critical_on_failure: true
+#
+#   - name: "nginx"
+#     type: "systemd_service"
+#     target: "nginx"
+#     interval_seconds: 60
+#     critical_on_failure: true
 
+# ------------------------------------------------------------
+# Storage — where GuardianD writes logs, metrics, and baselines
+# ------------------------------------------------------------
 storage:
+  # Directory for human-readable (.log) and structured (.jsonl) alert logs
   log_dir: "/var/log/guardian"
+
+  # Path to the SQLite database for metric snapshots and baselines
   db_path: "/var/lib/guardian/metrics.db"
+
+  # Maximum size of a single log file before rotation (megabytes)
   log_rotation_mb: 50
+
+  # Number of days to retain rotated log files
   log_retention_days: 30
+
+  # Number of days to retain metric snapshots in SQLite
   metric_retention_days: 7
 
+  # Number of days to retain baseline statistics in SQLite
+  baseline_retention_days: 30
+
+# ------------------------------------------------------------
+# REST API — used by guardianctl and external integrations
+# ------------------------------------------------------------
 api:
+  # Enable the REST API server
   enabled: true
+
+  # Bind address (127.0.0.1 = localhost-only, 0.0.0.0 = all interfaces)
   host: "127.0.0.1"
+
+  # TCP port for the REST API (must differ from prometheus.port)
   port: 9731
-  # Env override: GUARDIAN_API_TOKEN
+
+  # Bearer token for API authentication (leave empty to allow unauthenticated localhost access)
+  # Env: GUARDIAN_API_TOKEN
   auth_token: ""
+
+# ------------------------------------------------------------
+# Prometheus metrics exposition — scrape endpoint for Grafana
+# ------------------------------------------------------------
+prometheus:
+  # Set true to expose a /metrics endpoint compatible with Prometheus scraping
+  enabled: false
+
+  # Bind address for the metrics HTTP server
+  host: "0.0.0.0"
+
+  # TCP port for the metrics endpoint (must differ from api.port)
+  port: 9732
+
+  # URL path for the metrics endpoint
+  path: "/metrics"
+
+  # Include Python runtime metrics (GC, process CPU/mem) in the exposition
+  # Adds ~20 additional metrics; disable to keep cardinality low
+  include_process_metrics: false
+
+# ------------------------------------------------------------
+# Intelligence engine — Phase 2 anomaly detection, forecasting
+# ------------------------------------------------------------
+intelligence:
+  # Enable all intelligence features (anomaly, velocity, forecast, fingerprint)
+  # Automatically disabled internally if numpy is not installed
+  enabled: true
+
+  # Rolling window size for computing metric baselines (hours)
+  baseline_window_hours: 24
+
+  # Minimum number of samples collected before anomaly detection activates
+  # Anomaly and velocity alerts are suppressed until this count is reached
+  baseline_min_samples: 30
+
+  # Suppress all intelligence alerts for this many minutes after daemon start
+  # Allows metrics to stabilise before anomaly scoring begins
+  warmup_minutes: 5
+
+  # List of collectors to build rolling baselines for
+  # Valid values: cpu, memory, disk, network
+  anomaly_collectors:
+    - cpu
+    - memory
+    - disk
+    - network
+
+  # Enable rate-of-change (velocity) spike detection
+  # Alerts when a metric changes by more than velocity_spike_*_pct in one interval
+  velocity_enabled: true
+
+  # Enable linear regression trend forecasting
+  # Projects when a resource will reach its critical threshold
+  forecast_enabled: true
+
+  # List of collectors to run trend forecasting on
+  forecast_collectors:
+    - disk
+    - memory
+
+  # Enable bottleneck correlation engine
+  # Cross-correlates metrics to produce root-cause diagnoses (e.g. "disk I/O bottleneck")
+  fingerprint_enabled: true

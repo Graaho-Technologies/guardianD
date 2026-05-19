@@ -89,15 +89,20 @@ def _init_metrics(include_process: bool = False) -> bool:
         _metrics["g_cpu_load_norm"] = _g("guardian_cpu_load_normalized", "Normalized load", ["period"])
         _metrics["g_cpu_freq_cur"] = _g("guardian_cpu_freq_current_mhz", "CPU freq MHz")
         _metrics["g_ctx_switches"] = _g("guardian_cpu_ctx_switches_per_second", "Context switches/s")
+        _metrics["g_cpu_irq"] = _g("guardian_cpu_irq_percent", "CPU IRQ %")
+        _metrics["g_cpu_softirq"] = _g("guardian_cpu_softirq_percent", "CPU softirq %")
 
         # Memory
         _metrics["g_mem_used"] = _g("guardian_memory_used_bytes", "Memory used bytes")
         _metrics["g_mem_available"] = _g("guardian_memory_available_bytes", "Memory available bytes")
         _metrics["g_mem_total"] = _g("guardian_memory_total_bytes", "Memory total bytes")
         _metrics["g_mem_cached"] = _g("guardian_memory_cached_bytes", "Memory cached bytes")
+        _metrics["g_mem_buffers"] = _g("guardian_memory_buffers_bytes", "Memory buffers bytes")
+        _metrics["g_mem_writeback"] = _g("guardian_memory_writeback_bytes", "Memory writeback bytes")
         _metrics["g_mem_ratio"] = _g("guardian_memory_usage_ratio", "Memory usage ratio 0-1")
         _metrics["g_swap_used"] = _g("guardian_swap_used_bytes", "Swap used bytes")
         _metrics["g_swap_ratio"] = _g("guardian_swap_usage_ratio", "Swap usage ratio 0-1")
+        _metrics["g_swap_sin"] = _g("guardian_swap_in_pages_per_second", "Swap-in pages/s")
         _metrics["g_swap_sout"] = _g("guardian_swap_out_pages_per_second", "Swap-out pages/s")
         _metrics["g_dirty"] = _g("guardian_memory_dirty_bytes", "Dirty pages bytes")
         _metrics["g_dirty_ratio"] = _g("guardian_memory_dirty_ratio", "Dirty ratio 0-1")
@@ -137,6 +142,8 @@ def _init_metrics(include_process: bool = False) -> bool:
         _metrics["g_tcp_retrans"] = _g("guardian_tcp_retransmits_per_second", "TCP retransmits/s")
         _metrics["g_dns_latency"] = _g("guardian_dns_latency_milliseconds", "DNS latency ms")
         _metrics["g_dns_healthy"] = _g("guardian_dns_healthy", "DNS healthy 0/1")
+        _metrics["g_sockstat_tcp"] = _g("guardian_sockstat_tcp_alloc", "TCP allocated sockets")
+        _metrics["g_sockstat_udp"] = _g("guardian_sockstat_udp_inuse", "UDP in-use sockets")
 
         # PSI
         _metrics["g_psi_cpu"] = _g("guardian_psi_cpu_stall_ratio", "PSI CPU stall ratio", ["window", "type"])
@@ -148,8 +155,8 @@ def _init_metrics(include_process: bool = False) -> bool:
         _metrics["g_proc_zombie"] = _g("guardian_processes_zombie", "Zombie processes")
         _metrics["g_proc_dsleep"] = _g("guardian_processes_disk_sleep", "D-state processes")
 
-        # EC2
-        _metrics["i_ec2"] = _i("guardian_ec2_info", "EC2 instance info")
+        # EC2  — Info metric: guardian_ec2 → exposes guardian_ec2_info series
+        _metrics["i_ec2"] = _i("guardian_ec2", "EC2 instance info")
         _metrics["g_spot_interrupt"] = _g("guardian_ec2_spot_interruption_scheduled", "Spot interruption 0/1")
 
         # App Health
@@ -179,7 +186,8 @@ def _init_metrics(include_process: bool = False) -> bool:
             ["collector"],
             buckets=[1, 5, 10, 25, 50, 100, 250, 500, 1000],
         )
-        _metrics["i_build"] = _i_plain("guardian_build_info", "GuardianD build info")
+        # Build Info — guardian_build → exposes guardian_build_info series
+        _metrics["i_build"] = _i_plain("guardian_build", "GuardianD build info")
 
         _metrics_initialized = True
         _log.info("Prometheus metrics registry initialized")
@@ -228,6 +236,8 @@ def _update_cpu(snap: Any, lvs: List[str]) -> None:
     _safe_set("g_cpu_iowait", lvs, m.get("times_iowait", 0))
     _safe_set("g_cpu_steal", lvs, m.get("times_steal", 0))
     _safe_set("g_cpu_idle", lvs, m.get("times_idle", 0))
+    _safe_set("g_cpu_irq", lvs, m.get("times_irq", 0))
+    _safe_set("g_cpu_softirq", lvs, m.get("times_softirq", 0))
     _safe_set("g_cpu_freq_cur", lvs, m.get("freq_current_mhz", 0))
     _safe_set("g_ctx_switches", lvs, m.get("ctx_switches_per_sec", 0))
 
@@ -261,11 +271,14 @@ def _update_memory(snap: Any, lvs: List[str]) -> None:
     _safe_set("g_mem_available", lvs, m.get("available_bytes", 0))
     _safe_set("g_mem_total", lvs, m.get("total_bytes", 0))
     _safe_set("g_mem_cached", lvs, m.get("cached_bytes", 0))
+    _safe_set("g_mem_buffers", lvs, m.get("buffers_bytes", 0))
+    _safe_set("g_mem_writeback", lvs, m.get("writeback_bytes", 0))
     pct = m.get("percent_used", 0)
     _safe_set("g_mem_ratio", lvs, pct / 100.0 if pct else 0)
     _safe_set("g_swap_used", lvs, m.get("swap_used_bytes", 0))
     swap_pct = m.get("swap_percent", 0)
     _safe_set("g_swap_ratio", lvs, swap_pct / 100.0 if swap_pct else 0)
+    _safe_set("g_swap_sin", lvs, m.get("swap_sin_per_sec", 0))
     _safe_set("g_swap_sout", lvs, m.get("swap_sout_per_sec", 0))
     _safe_set("g_dirty", lvs, m.get("dirty_bytes", 0))
     dirty_ratio = m.get("dirty_ratio_percent", 0)
@@ -344,6 +357,10 @@ def _update_network(snap: Any, lvs: List[str]) -> None:
     _safe_set("g_tcp_retrans", lvs, tcp_stats.get("retransmits_per_sec", 0))
     _safe_set("g_dns_latency", lvs, m.get("dns_latency_ms", 0))
     _safe_set("g_dns_healthy", lvs, 1 if m.get("dns_healthy", False) else 0)
+
+    sockstat = m.get("sockstat", {})
+    _safe_set("g_sockstat_tcp", lvs, sockstat.get("tcp_alloc", 0))
+    _safe_set("g_sockstat_udp", lvs, sockstat.get("udp_inuse", 0))
 
 
 def _update_psi(snap: Any, lvs: List[str]) -> None:
