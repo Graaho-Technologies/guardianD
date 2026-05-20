@@ -467,6 +467,7 @@ class PrometheusExpositionServer:
     def __init__(self, config: Any) -> None:
         self.config = config
         self._started = False
+        self._label_values: Dict[str, str] = {"instance_id": "", "instance_name": "", "environment": ""}
 
     def start_background(self) -> None:
         if not self.config.enabled:
@@ -514,6 +515,7 @@ class PrometheusExpositionServer:
     def update(self, snapshots: Dict[str, Any], label_values: Dict[str, str]) -> None:
         if not self._started or not _PROMETHEUS_AVAILABLE:
             return
+        self._label_values = label_values
         try:
             _metrics["i_build"].info({"version": "0.1.0"})
         except Exception:
@@ -524,9 +526,14 @@ class PrometheusExpositionServer:
         if not self._started or not _PROMETHEUS_AVAILABLE:
             return
         try:
+            lvs = [
+                self._label_values.get("instance_id", ""),
+                self._label_values.get("instance_name", ""),
+                self._label_values.get("environment", ""),
+            ]
             if is_recovery:
-                _metrics["c_alerts_recovered"].labels("", "", "", category).inc()
+                _metrics["c_alerts_recovered"].labels(*lvs, category).inc()
             else:
-                _metrics["c_alerts_fired"].labels("", "", "", severity, category).inc()
+                _metrics["c_alerts_fired"].labels(*lvs, severity, category).inc()
         except Exception:
             pass

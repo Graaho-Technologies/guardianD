@@ -184,6 +184,19 @@ class GuardianDaemon:
         else:
             all_alerts = self.router.evaluate(snapshots)
 
+        ec2_snap = snapshots.get("ec2")
+        instance_id = ""
+        if ec2_snap and ec2_snap.metrics:
+            instance_id = ec2_snap.metrics.get("instance_id", "")
+        label_values = {
+            "instance_id": instance_id,
+            "instance_name": cfg.instance_name,
+            "environment": cfg.environment,
+        }
+        # Update prometheus label_values BEFORE dispatching alerts so record_alert
+        # has correct instance labels from the first cycle onwards.
+        self.prom_server.update(snapshots, label_values)
+
         recovery = self.router._check_recovery(snapshots)
         all_alerts.extend(recovery)
         sent = self.router.dispatch(all_alerts) or []
@@ -194,17 +207,6 @@ class GuardianDaemon:
                 self.log_writer.log_alert(a)
             except Exception as exc:
                 _log.error("store alert error: %s", exc)
-
-        ec2_snap = snapshots.get("ec2")
-        instance_id = ""
-        if ec2_snap and ec2_snap.metrics:
-            instance_id = ec2_snap.metrics.get("instance_id", "")
-        label_values = {
-            "instance_id": instance_id,
-            "instance_name": cfg.instance_name,
-            "environment": cfg.environment,
-        }
-        self.prom_server.update(snapshots, label_values)
         self._write_heartbeat()
 
     def _enrich_alerts(self, alerts: list, findings: list) -> None:
