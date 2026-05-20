@@ -186,7 +186,9 @@ class GuardianDaemon:
 
         recovery = self.router._check_recovery(snapshots)
         all_alerts.extend(recovery)
-        self.router.dispatch(all_alerts)
+        sent = self.router.dispatch(all_alerts) or []
+        for a in sent:
+            self.prom_server.record_alert(a.severity.name, a.category, a.is_recovery)
 
         ec2_snap = snapshots.get("ec2")
         instance_id = ""

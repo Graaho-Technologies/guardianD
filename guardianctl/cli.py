@@ -421,6 +421,15 @@ def init(output: str) -> None:
     from guardian.config.loader import generate_default_config
     generate_default_config(output)
     console.print(f"[green]Config written to {output}[/]")
+    console.print()
+    console.print("[bold]Next steps:[/]")
+    console.print(f"  1. [cyan]Set instance name:[/]  edit [bold]{output}[/]  →  instance_name: my-server")
+    console.print(f"  2. [cyan]Enable Telegram:[/]    guardianctl setup telegram --config {output}")
+    console.print(f"  3. [cyan]Validate config:[/]    guardianctl --config {output} config validate")
+    console.print(f"  4. [cyan]Start daemon:[/]       guardiand --config {output}")
+    console.print(f"  5. [cyan]Check status:[/]       guardianctl --config {output} status")
+    console.print()
+    console.print("[dim]Note: at least one alert channel must be enabled before the daemon will accept the config.[/]")
 
 
 @cli.command("install")
@@ -713,3 +722,208 @@ def prometheus_cmd(ctx: click.Context, subcommand: str) -> None:
             console.print(f"http://{host}:{port}/metrics")
         else:
             console.print("[yellow]Prometheus exposition is disabled.[/]")
+
+
+# --- Setup wizards ---
+
+@cli.group("setup")
+def setup_group() -> None:
+    """Interactive setup wizards for alert channels."""
+
+
+@setup_group.command("telegram")
+@click.option("--config", "config_path", default=_DEFAULT_CONFIG, help="Config file to update")
+def setup_telegram(config_path: str) -> None:
+    """Interactive wizard: configure Telegram alerts step-by-step."""
+    console.print(Panel.fit(
+        "[bold cyan]GuardianD — Telegram Setup Wizard[/]\n\n"
+        "You need a Telegram bot token and a chat ID.\n"
+        "Steps:\n"
+        "  1. Open Telegram → search [bold]@BotFather[/]\n"
+        "  2. Send [bold]/newbot[/], follow prompts → copy the [bold]API token[/]\n"
+        "  3. Start a chat with your new bot (or add it to a group)\n"
+        "  4. Send any message to the bot / group\n"
+        "  5. Come back here — we'll auto-detect your chat ID",
+        title="Setup"
+    ))
+
+    bot_token = click.prompt("\nPaste your bot token").strip()
+    if not bot_token or ":" not in bot_token:
+        console.print("[red]Invalid token format. Expected: 1234567890:ABCdef...[/]")
+        return
+
+    # Validate token by calling getMe
+    console.print("\n[dim]Validating token...[/]")
+    try:
+        resp = requests.get(
+            f"https://api.telegram.org/bot{bot_token}/getMe",
+            timeout=10
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            console.print(f"[red]Token rejected by Telegram:[/] {data.get('description', 'unknown error')}")
+            return
+        bot = data["result"]
+        console.print(f"[green]✓ Bot verified:[/] @{bot.get('username')} ({bot.get('first_name')})")
+    except Exception as e:
+        console.print(f"[red]Could not reach Telegram API:[/] {e}")
+        return
+
+    # Get updates to find chat_id
+    console.print("\n[dim]Fetching recent messages to detect your chat ID...[/]")
+    console.print("[yellow]  → Make sure you've sent at least one message to the bot[/]")
+    try:
+        resp = requests.get(
+            f"https://api.telegram.org/bot{bot_token}/getUpdates",
+            params={"limit": 10, "timeout": 0},
+            timeout=15
+        )
+        data = resp.json()
+        updates = data.get("result", [])
+    except Exception as e:
+        console.print(f"[red]Could not fetch updates:[/] {e}")
+        updates = []
+
+    chat_id = ""
+    if updates:
+        chats: dict = {}
+        for upd in updates:
+            msg = upd.get("message") or upd.get("channel_post") or {}
+            chat = msg.get("chat", {})
+            if chat.get("id"):
+                cid = str(chat["id"])
+                ctype = chat.get("type", "?")
+                ctitle = chat.get("title") or chat.get("username") or chat.get("first_name") or cid
+                chats[cid] = f"{ctitle} ({ctype})"
+
+        if chats:
+            console.print("\nDetected chats:")
+            items = list(chats.items())
+            for i, (cid, name) in enumerate(items, 1):
+                console.print(f"  [{i}] {name}  [dim]chat_id={cid}[/]")
+            if len(items) == 1:
+                chat_id = items[0][0]
+                console.print(f"\n[green]Auto-selected:[/] {chat_id}")
+            else:
+                idx = click.prompt("Select chat number", type=click.IntRange(1, len(items)), default=1)
+                chat_id = items[idx - 1][0]
+
+    if not chat_id:
+        console.print("\n[yellow]No messages detected.[/] Enter chat ID manually:")
+        console.print("  (Find it at api.telegram.org/bot{TOKEN}/getUpdates after sending a message)")
+        chat_id = click.prompt("Chat ID").strip()
+
+    # Send a real test message
+    console.print(f"\n[dim]Sending test message to chat {chat_id}...[/]")
+    try:
+        test_msg = (
+            r"✅ *GuardianD connected\!*" + "\n\n"
+            r"Your Telegram alerting is configured correctly\." + "\n"
+            r"You will receive alerts here when thresholds are breached\."
+        )
+        resp = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": "✅ GuardianD connected! Telegram alerting is working.", "parse_mode": None},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            console.print("[green]✓ Test message sent! Check your Telegram.[/]")
+        else:
+            err = resp.json().get("description", resp.text[:200])
+            console.print(f"[red]Send failed:[/] {err}")
+            return
+    except Exception as e:
+        console.print(f"[red]Send error:[/] {e}")
+        return
+
+    # Update config file
+    if os.path.exists(config_path):
+        try:
+            import yaml
+            with open(config_path) as f:
+                cfg_data = yaml.safe_load(f) or {}
+            if "alerts" not in cfg_data:
+                cfg_data["alerts"] = {}
+            cfg_data["alerts"]["telegram"] = {
+                "enabled": True,
+                "bot_token": bot_token,
+                "chat_id": chat_id,
+                "min_severity": "WARN",
+            }
+            with open(config_path, "w") as f:
+                yaml.dump(cfg_data, f, default_flow_style=False, allow_unicode=True)
+            console.print(f"\n[green]✓ Config updated:[/] {config_path}")
+            console.print("  Reload daemon:  [bold]guardianctl config reload[/]")
+            console.print("  Test alert:     [bold]guardianctl test-alert --channel telegram[/]")
+        except Exception as e:
+            console.print(f"\n[yellow]Could not update config:[/] {e}")
+            console.print(f"Add manually to {config_path}:")
+            console.print(f"  alerts.telegram.enabled: true")
+            console.print(f"  alerts.telegram.bot_token: {bot_token}")
+            console.print(f"  alerts.telegram.chat_id: {chat_id}")
+    else:
+        console.print(f"\n[yellow]Config file not found:[/] {config_path}")
+        console.print("  Run [bold]guardianctl init --output /path/to/guardian.yaml[/] first.")
+
+
+@setup_group.command("grafana")
+@click.pass_context
+def setup_grafana(ctx: click.Context) -> None:
+    """Show Grafana setup instructions and Prometheus scrape config."""
+    # Try to get Prometheus port from running daemon
+    prom_port = 9732
+    prom_host = "localhost"
+    try:
+        data = _get(ctx, "/api/v1/status")
+        prom = (data or {}).get("prometheus", {})
+        if prom.get("enabled"):
+            prom_port = prom.get("port", 9732)
+            prom_host = prom.get("host", "0.0.0.0")
+            if prom_host in ("0.0.0.0", ""):
+                prom_host = "localhost"
+    except SystemExit:
+        pass
+
+    scrape_url = f"http://{prom_host}:{prom_port}/metrics"
+
+    console.print(Panel.fit(
+        "[bold cyan]GuardianD — Grafana Setup[/]",
+        title="Setup"
+    ))
+
+    console.print("\n[bold]Step 1 — Enable Prometheus in guardian.yaml:[/]")
+    console.print("""
+  prometheus:
+    enabled: true
+    host: "0.0.0.0"
+    port: 9732
+""")
+
+    console.print("[bold]Step 2 — Add Prometheus datasource in Grafana:[/]")
+    console.print(f"  URL: [cyan]{scrape_url}[/]")
+    console.print("  In Grafana: Configuration → Data Sources → Add → Prometheus")
+    console.print(f"  Set URL to: {scrape_url}")
+    console.print("  Click [bold]Save & Test[/]\n")
+
+    console.print("[bold]Step 3 — Import the dashboard:[/]")
+    dashboard_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "grafana", "dashboard.json"
+    )
+    dashboard_path = os.path.normpath(dashboard_path)
+    console.print("  In Grafana: Dashboards → Import → Upload JSON file")
+    console.print(f"  File: [cyan]{dashboard_path}[/]")
+    console.print("  Select your Prometheus datasource → Import\n")
+
+    console.print("[bold]Step 4 — Select your instance:[/]")
+    console.print("  Use the [bold]Instance[/] dropdown at the top of the dashboard")
+    console.print("  Your instance name is set in guardian.yaml → [bold]instance_name[/]\n")
+
+    # Live check
+    try:
+        import urllib.request
+        r = urllib.request.urlopen(scrape_url, timeout=3)
+        console.print(f"[green]✓ Prometheus metrics endpoint reachable:[/] {scrape_url}")
+        console.print(f"  {r.status} OK — Grafana can scrape this")
+    except Exception:
+        console.print(f"[yellow]⚠ Cannot reach {scrape_url}[/]")
+        console.print("  Make sure daemon is running with prometheus.enabled: true")

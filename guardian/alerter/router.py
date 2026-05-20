@@ -427,7 +427,7 @@ class AlertRouter:
             ))
         return recoveries
 
-    def dispatch(self, alerts: List[Alert]) -> None:
+    def dispatch(self, alerts: List[Alert]) -> List[Alert]:
         now = time.time()
         cooldown = self.config.alerts.cooldown_seconds
         escalation_secs = self.config.alerts.escalation_minutes * 60
@@ -470,14 +470,16 @@ class AlertRouter:
             to_send.append(alert)
 
         if not to_send:
-            return
+            return []
 
         max_per_dispatch = self.config.alerts.max_alerts_per_dispatch
-        if self.config.alerts.group_alerts and len(to_send) > 1:
-            self._send_grouped(to_send[:max_per_dispatch])
+        batch = to_send[:max_per_dispatch]
+        if self.config.alerts.group_alerts and len(batch) > 1:
+            self._send_grouped(batch)
         else:
-            for alert in to_send[:max_per_dispatch]:
+            for alert in batch:
                 self._send_single(alert)
+        return batch
 
     def _send_single(self, alert: Alert) -> None:
         with ThreadPoolExecutor(max_workers=max(1, len(self.alerters))) as ex:
