@@ -71,14 +71,16 @@ guardianctl init --output ~/guardian/guardian.yaml
 This creates a fully-commented config and prints next steps:
 
 ```
-✓ Config written to ~/guardian/guardian.yaml
+Config written to ~/guardian/guardian.yaml
 
 Next steps:
-  1. Set instance name:  edit guardian.yaml  →  instance_name: my-server
+  1. Set instance name:  edit ~/guardian/guardian.yaml  →  instance_name: my-server
   2. Enable Telegram:    guardianctl setup telegram --config ~/guardian/guardian.yaml
   3. Validate config:    guardianctl --config ~/guardian/guardian.yaml config validate
   4. Start daemon:       guardiand --config ~/guardian/guardian.yaml
   5. Check status:       guardianctl --config ~/guardian/guardian.yaml status
+
+Note: at least one alert channel must be enabled before the daemon will accept the config.
 ```
 
 ### 3. Set your instance name
@@ -274,7 +276,9 @@ Grafana runs at `http://localhost:3000` (default login: `admin` / `admin`).
 
 **Step 4 — Add Prometheus datasource**
 
-In Grafana: **Configuration → Data Sources → Add → Prometheus**
+In Grafana: **Connections → Data sources → Add new data source → Prometheus**
+
+(Older Grafana: **Configuration → Data Sources → Add data source → Prometheus**)
 
 Set URL: `http://localhost:9090` ← Prometheus server port, NOT `:9732`
 
@@ -299,7 +303,7 @@ Select your Prometheus datasource → **Import**
 Or use the setup wizard for guided instructions:
 
 ```bash
-guardianctl setup grafana --config ~/guardian/guardian.yaml
+guardianctl setup grafana
 ```
 
 **Step 6 — View data**
@@ -369,7 +373,7 @@ intelligence:
   enabled: true
   baseline_window_hours: 24    # rolling window for baseline
   baseline_min_samples: 30     # minimum samples before anomaly detection fires
-  warmup_minutes: 2
+  warmup_minutes: 5            # suppress intelligence alerts for 5 min after start
   velocity_enabled: true       # rate-of-change alerts
   forecast_enabled: true       # linear regression trend forecasting
 ```
@@ -520,8 +524,8 @@ thresholds:
 **Permission denied on `/var/run/guardian`**
 Normal on non-root. Heartbeat and PID file need root. Run with `sudo` in production or accept the warnings in dev.
 
-**EC2 collector timeout (1s per cycle)**
-Expected on non-EC2. Set `ec2_imds_timeout: 1` (already default). On actual EC2, IMDS responds in <5ms.
+**EC2 collector timeout (2s per cycle)**
+Expected on non-EC2. Default is `ec2_imds_timeout: 2`. Lower to `1` to reduce startup time on non-EC2 hosts. On actual EC2, IMDS responds in <5ms.
 
 **PSI metrics show 0 on macOS**
 Expected — PSI requires Linux kernel 4.20+. Panels show 0, not "No data".

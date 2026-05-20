@@ -405,5 +405,7 @@ api:
   # Env override: GUARDIAN_API_TOKEN
   auth_token: ""
 """
+    import os
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w") as f:
         f.write(content)
