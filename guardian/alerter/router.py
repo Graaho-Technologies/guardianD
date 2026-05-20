@@ -434,6 +434,9 @@ class AlertRouter:
         to_send: List[Alert] = []
 
         for alert in alerts:
+            if alert.is_recovery:
+                to_send.append(alert)
+                continue
             fp = alert.fingerprint
             if fp in self._active:
                 orig_alert, first_seen, last_sent = self._active[fp]

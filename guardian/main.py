@@ -217,8 +217,14 @@ class GuardianDaemon:
         with self._config_lock:
             timeout = max(1, self.config.collector.interval_seconds - 2)
         results: Dict[str, MetricSnapshot] = {}
+        def _timed_collect(collector: BaseCollector) -> MetricSnapshot:
+            t0 = time.time()
+            snap = collector.collect()
+            snap.collection_duration_ms = (time.time() - t0) * 1000.0
+            return snap
+
         with ThreadPoolExecutor(max_workers=len(self.collectors)) as pool:
-            futures = {pool.submit(c.collect): c for c in self.collectors}
+            futures = {pool.submit(_timed_collect, c): c for c in self.collectors}
             for fut, collector in futures.items():
                 try:
                     snap = fut.result(timeout=timeout)

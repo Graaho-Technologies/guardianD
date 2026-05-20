@@ -480,9 +480,19 @@ def uninstall(remove_data: bool) -> None:
 @click.option("--follow", "-f", is_flag=True)
 @click.option("--lines", "-n", default=50)
 @click.option("--level", default=None, type=click.Choice(["INFO", "WARN", "CRITICAL", "EMERGENCY"]))
-def logs(follow: bool, lines: int, level: Optional[str]) -> None:
+@click.pass_context
+def logs(ctx: click.Context, follow: bool, lines: int, level: Optional[str]) -> None:
     """Show daemon logs."""
-    log_path = "/var/log/guardian/guardian.log"
+    log_dir = "/var/log/guardian"
+    config_path = ctx.obj.get("config", _DEFAULT_CONFIG)
+    try:
+        import yaml
+        with open(config_path) as f:
+            raw = yaml.safe_load(f) or {}
+        log_dir = raw.get("storage", {}).get("log_dir", log_dir)
+    except Exception:
+        pass
+    log_path = os.path.join(log_dir, "guardian.log")
     if not os.path.exists(log_path):
         console.print(f"[yellow]Log file not found:[/] {log_path}")
         sys.exit(1)
