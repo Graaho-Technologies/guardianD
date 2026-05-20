@@ -1,28 +1,85 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 
 @dataclass
 class ThresholdConfig:
+    # CPU
     cpu_warn: float = 80.0
     cpu_critical: float = 95.0
-    memory_warn: float = 80.0
-    memory_critical: float = 92.0
-    disk_warn: float = 85.0
-    disk_critical: float = 95.0
-    swap_warn: float = 50.0
-    swap_critical: float = 80.0
+    cpu_steal_warn: float = 5.0
+    cpu_steal_critical: float = 15.0
+    cpu_iowait_warn: float = 40.0
+    cpu_iowait_critical: float = 60.0
     load_avg_warn_multiplier: float = 2.0
     load_avg_critical_multiplier: float = 4.0
-    cpu_steal_warn: float = 10.0
-    cpu_steal_critical: float = 20.0
-    disk_await_warn_ms: float = 100.0
-    disk_await_critical_ms: float = 500.0
+
+    # Memory
+    memory_warn: float = 80.0
+    memory_critical: float = 92.0
+    swap_warn: float = 50.0
+    swap_critical: float = 80.0
+    swap_sout_warn: float = 10.0
+    swap_sout_critical: float = 100.0
+    dirty_ratio_warn: float = 10.0
+    dirty_ratio_critical: float = 20.0
+    fd_exhaustion_warn: float = 80.0
+    fd_exhaustion_critical: float = 95.0
+
+    # Disk space
+    disk_warn: float = 85.0
+    disk_critical: float = 95.0
+    inode_warn: float = 85.0
+    inode_critical: float = 95.0
+
+    # Disk I/O latency — separate by disk type
+    disk_await_ssd_warn_ms: float = 10.0
+    disk_await_ssd_critical_ms: float = 50.0
+    disk_await_hdd_warn_ms: float = 100.0
+    disk_await_hdd_critical_ms: float = 500.0
+    disk_await_ebs_warn_ms: float = 20.0
+    disk_await_ebs_critical_ms: float = 100.0
+    disk_await_nvme_warn_ms: float = 10.0
+    disk_await_nvme_critical_ms: float = 50.0
+
+    # Network
+    network_error_rate_warn: float = 0.1
+    network_error_rate_critical: float = 1.0
+    network_drop_rate_warn: float = 0.05
+    network_drop_rate_critical: float = 0.5
     tcp_close_wait_warn: int = 100
     tcp_close_wait_critical: int = 500
-    network_error_rate_warn: float = 0.1
+    tcp_time_wait_warn: int = 1000
+    tcp_syn_recv_warn: int = 100
+
+    # Process
+    zombie_warn: int = 5
+    zombie_critical: int = 20
+
+    # System events
     oom_kills_critical: int = 1
+
+    # PSI (Pressure Stall Information) — Linux 4.20+
+    psi_cpu_some_warn: float = 30.0
+    psi_cpu_some_critical: float = 70.0
+    psi_memory_some_warn: float = 10.0
+    psi_memory_some_critical: float = 30.0
+    psi_memory_full_warn: float = 5.0
+    psi_memory_full_critical: float = 15.0
+    psi_io_some_warn: float = 20.0
+    psi_io_some_critical: float = 50.0
+    psi_io_full_warn: float = 10.0
+    psi_io_full_critical: float = 30.0
+
+    # Intelligence / Phase 2
+    anomaly_zscore_warn: float = 2.0
+    anomaly_zscore_critical: float = 3.0
+    velocity_spike_warn_pct: float = 40.0
+    velocity_spike_critical_pct: float = 70.0
+    forecast_disk_full_warn_hours: float = 8.0
+    forecast_disk_full_critical_hours: float = 2.0
 
 
 @dataclass
@@ -51,7 +108,7 @@ class EmailConfig:
     smtp_user: str = ""
     smtp_password: str = ""
     from_addr: str = ""
-    to_addrs: list = field(default_factory=list)
+    to_addrs: List[str] = field(default_factory=list)
     use_tls: bool = True
     min_severity: str = "CRITICAL"
 
@@ -70,6 +127,7 @@ class AlertConfig:
     escalation_minutes: int = 15
     recovery_notifications: bool = True
     group_alerts: bool = True
+    max_alerts_per_dispatch: int = 10
     slack: SlackConfig = field(default_factory=SlackConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     email: EmailConfig = field(default_factory=EmailConfig)
@@ -79,12 +137,13 @@ class AlertConfig:
 @dataclass
 class AppHealthCheck:
     name: str = ""
-    type: str = "port"
+    type: str = "http"
     target: str = ""
     interval_seconds: int = 30
     timeout_seconds: int = 5
     expected_status_code: int = 200
     critical_on_failure: bool = True
+    headers: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -94,6 +153,7 @@ class StorageConfig:
     log_rotation_mb: int = 50
     log_retention_days: int = 30
     metric_retention_days: int = 7
+    baseline_retention_days: int = 30
 
 
 @dataclass
@@ -105,11 +165,38 @@ class APIConfig:
 
 
 @dataclass
+class PrometheusConfig:
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 9732
+    path: str = "/metrics"
+    include_process_metrics: bool = False
+
+
+@dataclass
+class IntelligenceConfig:
+    enabled: bool = True
+    baseline_window_hours: int = 24
+    baseline_min_samples: int = 30
+    warmup_minutes: int = 5
+    anomaly_collectors: List[str] = field(default_factory=lambda: [
+        "cpu", "memory", "disk", "network"
+    ])
+    velocity_enabled: bool = True
+    forecast_enabled: bool = True
+    forecast_collectors: List[str] = field(default_factory=lambda: ["disk", "memory"])
+    fingerprint_enabled: bool = True
+
+
+@dataclass
 class CollectorConfig:
     interval_seconds: int = 10
     process_top_n: int = 10
     ec2_imds_timeout: int = 2
     spot_interruption_check: bool = True
+    dns_check_host: str = "169.254.169.253"
+    dns_check_fallback: str = "8.8.8.8"
+    disk_type_detection: bool = True
 
 
 @dataclass
@@ -119,6 +206,8 @@ class GuardianConfig:
     collector: CollectorConfig = field(default_factory=CollectorConfig)
     thresholds: ThresholdConfig = field(default_factory=ThresholdConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
-    app_health_checks: list = field(default_factory=list)
+    intelligence: IntelligenceConfig = field(default_factory=IntelligenceConfig)
+    app_health_checks: List[AppHealthCheck] = field(default_factory=list)
     storage: StorageConfig = field(default_factory=StorageConfig)
     api: APIConfig = field(default_factory=APIConfig)
+    prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)

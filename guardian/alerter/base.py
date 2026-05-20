@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
-import uuid
+from typing import Dict
 
-if TYPE_CHECKING:
-    pass
+SEVERITY_ORDER: Dict[str, int] = {"INFO": 0, "WARN": 1, "CRITICAL": 2, "EMERGENCY": 3}
 
 
 class AlertSeverity(Enum):
@@ -15,6 +14,10 @@ class AlertSeverity(Enum):
     WARN = 1
     CRITICAL = 2
     EMERGENCY = 3
+
+
+def make_fingerprint(category: str, title: str) -> str:
+    return hashlib.sha256(f"{category}|{title}".encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -30,10 +33,14 @@ class Alert:
     environment: str
     timestamp: float
     fingerprint: str
+    is_recovery: bool = False
+    anomaly_score: float = 0.0
+    forecast_eta_minutes: float = 0.0
 
 
 class BaseAlerter(ABC):
     name: str = "base"
+    min_severity: str = "WARN"
 
     @abstractmethod
     def send(self, alert: Alert) -> bool:
@@ -42,9 +49,6 @@ class BaseAlerter(ABC):
     def is_enabled(self) -> bool:
         return True
 
-    def meets_severity_threshold(self, alert: Alert, min_severity: str) -> bool:
-        try:
-            min_sev = AlertSeverity[min_severity.upper()]
-        except KeyError:
-            min_sev = AlertSeverity.WARN
-        return alert.severity.value >= min_sev.value
+    def meets_severity_threshold(self, alert: Alert) -> bool:
+        return (SEVERITY_ORDER.get(alert.severity.name, 0) >=
+                SEVERITY_ORDER.get(self.min_severity, 1))

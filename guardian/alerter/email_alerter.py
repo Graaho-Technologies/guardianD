@@ -62,6 +62,7 @@ class EmailAlerter(BaseAlerter):
     def __init__(self, config: EmailConfig, version: str = "0.1.0") -> None:
         self.config = config
         self.version = version
+        self.min_severity = config.min_severity
 
     def is_enabled(self) -> bool:
         return self.config.enabled
@@ -69,7 +70,7 @@ class EmailAlerter(BaseAlerter):
     def send(self, alert: Alert) -> bool:
         if not self.config.enabled:
             return False
-        if not self.meets_severity_threshold(alert, self.config.min_severity):
+        if not self.meets_severity_threshold(alert):
             return False
         try:
             color = _COLORS.get(alert.severity, "#cccccc")

@@ -11,6 +11,15 @@ from .base import Alert, AlertSeverity, BaseAlerter
 
 _log = get_logger(__name__)
 
+_MDV2_ESCAPE = str.maketrans({
+    c: f"\\{c}" for c in r"\_*[]()~`>#+-=|{}.!"
+})
+
+
+def escape_mdv2(text: str) -> str:
+    return text.translate(_MDV2_ESCAPE)
+
+
 _EMOJIS = {
     AlertSeverity.INFO: "ℹ️",
     AlertSeverity.WARN: "⚠️",
@@ -24,6 +33,7 @@ class TelegramAlerter(BaseAlerter):
 
     def __init__(self, config: TelegramConfig) -> None:
         self.config = config
+        self.min_severity = config.min_severity
 
     def is_enabled(self) -> bool:
         return self.config.enabled
@@ -31,31 +41,39 @@ class TelegramAlerter(BaseAlerter):
     def send(self, alert: Alert) -> bool:
         if not self.config.enabled:
             return False
-        if not self.meets_severity_threshold(alert, self.config.min_severity):
+        if not self.meets_severity_threshold(alert):
             return False
         try:
             emoji = _EMOJIS.get(alert.severity, "🔔")
             ts_human = datetime.fromtimestamp(alert.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
             metric_lines = "\n".join(
-                f"`{k}`: {v}" for k, v in list(alert.metrics.items())[:10]
+                f"• `{escape_mdv2(str(k))}`: {escape_mdv2(str(v))}"
+                for k, v in list(alert.metrics.items())[:10]
             )
 
+            prefix = ""
+            if alert.is_recovery:
+                prefix = "✅ *RECOVERED* — "
+            elif alert.severity == AlertSeverity.EMERGENCY:
+                prefix = "🆘 URGENT: "
+
             text = (
-                f"{emoji} *{alert.severity.name}* — {alert.title}\n\n"
-                f"{alert.message}\n\n"
-                f"📍 *Instance*: {alert.instance_name}\n"
-                f"🌍 *Environment*: {alert.environment}\n"
-                f"🕐 *Time*: {ts_human}\n"
+                f"{prefix}{emoji} *{alert.severity.name}* — {escape_mdv2(alert.title)}\n\n"
+                f"{escape_mdv2(alert.message)}\n\n"
+                f"🖥 *Instance*: `{escape_mdv2(alert.instance_name)}`\n"
+                f"🌍 *Environment*: `{escape_mdv2(alert.environment)}`\n"
+                f"🕐 *Time*: {escape_mdv2(ts_human)}\n"
+                f"🆔 *ID*: `{escape_mdv2(alert.instance_id)}`\n"
             )
             if metric_lines:
-                text += f"\n*Metrics:*\n{metric_lines}"
+                text += f"\n*Triggering Metrics:*\n{metric_lines}"
 
             url = f"https://api.telegram.org/bot{self.config.bot_token}/sendMessage"
             for attempt in range(3):
                 resp = requests.post(
                     url,
-                    json={"chat_id": self.config.chat_id, "text": text, "parse_mode": "Markdown"},
+                    json={"chat_id": self.config.chat_id, "text": text, "parse_mode": "MarkdownV2"},
                     timeout=10,
                 )
                 if resp.status_code == 200:
