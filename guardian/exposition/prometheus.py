@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional
 
 from ..utils.logger import get_logger
@@ -453,7 +455,35 @@ class PrometheusExpositionServer:
             return
         _init_metrics(include_process=self.config.include_process_metrics)
         try:
-            start_http_server(self.config.port, addr=self.config.host)
+            path = self.config.path
+
+            class _Handler(BaseHTTPRequestHandler):
+                def do_GET(self) -> None:
+                    if self.path == "/-/healthy":
+                        body = json.dumps({"status": "ok"}).encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                    elif self.path == "/" or self.path == "":
+                        self.send_response(302)
+                        self.send_header("Location", path)
+                        self.end_headers()
+                    else:
+                        output = generate_latest(REGISTRY)
+                        self.send_response(200)
+                        self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+                        self.send_header("Content-Length", str(len(output)))
+                        self.end_headers()
+                        self.wfile.write(output)
+
+                def log_message(self, fmt: str, *args: Any) -> None:
+                    pass  # suppress access log noise
+
+            server = HTTPServer((self.config.host, self.config.port), _Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
             self._started = True
             _log.info("Prometheus metrics listening on %s:%s%s",
                       self.config.host, self.config.port, self.config.path)

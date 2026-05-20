@@ -885,6 +885,7 @@ def setup_grafana(ctx: click.Context) -> None:
         pass
 
     scrape_url = f"http://{prom_host}:{prom_port}/metrics"
+    datasource_url = f"http://{prom_host}:{prom_port}"
 
     console.print(Panel.fit(
         "[bold cyan]GuardianD — Grafana Setup[/]",
@@ -900,9 +901,9 @@ def setup_grafana(ctx: click.Context) -> None:
 """)
 
     console.print("[bold]Step 2 — Add Prometheus datasource in Grafana:[/]")
-    console.print(f"  URL: [cyan]{scrape_url}[/]")
+    console.print(f"  Datasource URL: [cyan]{datasource_url}[/]  [dim](base URL — not /metrics)[/]")
     console.print("  In Grafana: Configuration → Data Sources → Add → Prometheus")
-    console.print(f"  Set URL to: {scrape_url}")
+    console.print(f"  Set URL to: {datasource_url}")
     console.print("  Click [bold]Save & Test[/]\n")
 
     console.print("[bold]Step 3 — Import the dashboard:[/]")

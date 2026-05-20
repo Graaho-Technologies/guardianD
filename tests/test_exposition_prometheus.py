@@ -318,12 +318,14 @@ def test_prometheus_server_disabled_does_not_start(mocker):
     assert server._started is False
 
 
-def test_prometheus_server_start_background_calls_http_server(mocker):
-    mock_start = mocker.patch("guardian.exposition.prometheus.start_http_server")
+def test_prometheus_server_start_background_starts_thread(mocker):
+    mock_server_cls = mocker.patch("guardian.exposition.prometheus.HTTPServer")
+    mock_thread_cls = mocker.patch("guardian.exposition.prometheus.threading.Thread")
+    mock_thread = mock_thread_cls.return_value
 
     cfg = PrometheusConfig()
     cfg.enabled = True
-    cfg.port = 19732   # Use a high port unlikely to conflict
+    cfg.port = 19732
     cfg.host = "127.0.0.1"
     cfg.path = "/metrics"
     cfg.include_process_metrics = False
@@ -331,13 +333,14 @@ def test_prometheus_server_start_background_calls_http_server(mocker):
     server = PrometheusExpositionServer(cfg)
     server.start_background()
 
-    mock_start.assert_called_once_with(19732, addr="127.0.0.1")
+    mock_server_cls.assert_called_once()
+    mock_thread.start.assert_called_once()
     assert server._started is True
 
 
 def test_prometheus_server_start_failure_does_not_raise(mocker):
     mocker.patch(
-        "guardian.exposition.prometheus.start_http_server",
+        "guardian.exposition.prometheus.HTTPServer",
         side_effect=OSError("address in use"),
     )
 

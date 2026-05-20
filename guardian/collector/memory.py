@@ -46,7 +46,7 @@ def _parse_file_nr() -> Tuple[int, int]:
             parts = f.read().split()
             return int(parts[0]), int(parts[2])
     except Exception:
-        return 0, 1
+        return 0, 0
 
 
 class MemoryCollector(BaseCollector):

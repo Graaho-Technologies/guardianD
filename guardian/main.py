@@ -189,6 +189,11 @@ class GuardianDaemon:
         sent = self.router.dispatch(all_alerts) or []
         for a in sent:
             self.prom_server.record_alert(a.severity.name, a.category, a.is_recovery)
+            try:
+                self.store.insert_alert(a, [])
+                self.log_writer.log_alert(a)
+            except Exception as exc:
+                _log.error("store alert error: %s", exc)
 
         ec2_snap = snapshots.get("ec2")
         instance_id = ""
