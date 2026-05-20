@@ -9,6 +9,7 @@ import requests
 
 from ..config.schema import WebhookConfig
 from ..utils.logger import get_logger
+from ..utils.retry import retry
 from .base import Alert, BaseAlerter
 
 _log = get_logger(__name__)
@@ -54,11 +55,15 @@ class WebhookAlerter(BaseAlerter):
                 ).hexdigest()
                 headers["X-Guardian-Signature"] = f"sha256={sig}"
 
-            resp = requests.post(self.config.url, data=body, headers=headers, timeout=10)
-            if 200 <= resp.status_code < 300:
-                return True
-            _log.error("webhook send failed: %s %s", resp.status_code, resp.text[:200])
-            return False
+            return self._post_with_retry(body, headers)
         except Exception as exc:
             _log.error("webhook send error: %s", exc)
             return False
+
+    @retry(max_attempts=3, backoff_seconds=2.0, exceptions=(Exception,))
+    def _post_with_retry(self, body: str, headers: dict) -> bool:
+        resp = requests.post(self.config.url, data=body, headers=headers, timeout=10)
+        if 200 <= resp.status_code < 300:
+            return True
+        _log.error("webhook send failed: %s %s", resp.status_code, resp.text[:200])
+        return False

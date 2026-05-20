@@ -11,15 +11,18 @@ from guardian.collector.process import ProcessCollector, _proc_dict
 def _mock_proc(name="python3", status=psutil.STATUS_SLEEPING, pid=100, ppid=1,
                cpu_pct=5.0, mem_pct=2.0, rss=50*1024*1024):
     p = MagicMock(spec=psutil.Process)
+    mem_mock = MagicMock()
+    mem_mock.rss = rss
+    mem_mock.vms = rss * 2
     info = {
         "pid": pid, "name": name, "cmdline": ["python3", "app.py"],
         "cpu_percent": cpu_pct, "memory_percent": mem_pct,
-        "memory_info": MagicMock(rss=rss),
+        "memory_info": mem_mock,
         "status": status, "num_threads": 2,
-        "username": "root", "ppid": ppid,
+        "username": "root", "ppid": ppid, "create_time": 1700000000.0,
     }
     p.as_dict.return_value = info
-    p.open_files.return_value = []
+    p.num_fds.return_value = 10
     return p
 
 
@@ -49,8 +52,8 @@ def test_process_collector_detects_zombies(mocker):
     mocker.patch("psutil.process_iter", return_value=[zombie])
     snap = ProcessCollector().collect()
     assert snap.metrics["zombie"] == 1
-    assert len(snap.metrics["zombie_list"]) == 1
-    assert snap.metrics["zombie_list"][0]["pid"] == 200
+    assert len(snap.metrics["zombies"]) == 1
+    assert snap.metrics["zombies"][0]["pid"] == 200
 
 
 def test_process_collector_top_cpu_sorted(mocker):
@@ -62,8 +65,8 @@ def test_process_collector_top_cpu_sorted(mocker):
 
 
 def test_process_collector_top_mem_sorted(mocker):
-    small = _mock_proc("small", psutil.STATUS_SLEEPING, 101, mem_pct=1.0)
-    large = _mock_proc("large", psutil.STATUS_SLEEPING, 102, mem_pct=50.0)
+    small = _mock_proc("small", psutil.STATUS_SLEEPING, 101, mem_pct=1.0, rss=10*1024*1024)
+    large = _mock_proc("large", psutil.STATUS_SLEEPING, 102, mem_pct=50.0, rss=200*1024*1024)
     mocker.patch("psutil.process_iter", return_value=[small, large])
     snap = ProcessCollector(top_n=2).collect()
     assert snap.metrics["top_memory"][0]["name"] == "large"

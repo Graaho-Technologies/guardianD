@@ -63,7 +63,15 @@ class EC2Collector(BaseCollector):
                 return MetricSnapshot(
                     collector_name=self.name,
                     timestamp=ts,
-                    metrics={"is_ec2": False},
+                    metrics={
+                        "is_ec2": False,
+                        "instance_id": "", "instance_type": "",
+                        "availability_zone": "", "region": "",
+                        "ami_id": "", "public_ip": "", "private_ip": "",
+                        "hostname": "", "iam_role": "", "instance_lifecycle": "",
+                        "spot_interruption": {"scheduled": False, "action": "", "notice_time": ""},
+                        "cpu_credits": {}, "ebs_volumes": [],
+                    },
                     status="ok",
                 )
 
@@ -99,6 +107,15 @@ class EC2Collector(BaseCollector):
             if creds_list:
                 iam_role = creds_list.strip().splitlines()[0] if creds_list else ""
 
+            lifecycle = g("/latest/meta-data/instance-life-cycle") or "on-demand"
+
+            ebs_volumes: list = []
+            bdm = self._get("/latest/meta-data/block-device-mapping/", token)
+            if bdm:
+                for dev in bdm.strip().splitlines():
+                    vol_id = self._get(f"/latest/meta-data/block-device-mapping/{dev.strip()}", token) or ""
+                    ebs_volumes.append({"device": dev.strip(), "volume_id": vol_id})
+
             metrics = {
                 "is_ec2": True,
                 "instance_id": g("/latest/meta-data/instance-id"),
@@ -110,14 +127,23 @@ class EC2Collector(BaseCollector):
                 "private_ip": g("/latest/meta-data/local-ipv4"),
                 "hostname": g("/latest/meta-data/hostname"),
                 "iam_role": iam_role,
-                # TODO(Phase 2): integrate CloudWatch for T-series CPU credit balance
+                "instance_lifecycle": lifecycle,
                 "cpu_credits": {},
                 "spot_interruption": spot_info,
+                "ebs_volumes": ebs_volumes,
             }
             return MetricSnapshot(collector_name=self.name, timestamp=ts, metrics=metrics)
         except Exception as exc:
             _log.error("ec2 collect error: %s", exc)
             return MetricSnapshot(
                 collector_name=self.name, timestamp=ts,
-                metrics={"is_ec2": False}, status="error", error=str(exc),
+                metrics={
+                    "is_ec2": False, "instance_id": "", "instance_type": "",
+                    "availability_zone": "", "region": "", "ami_id": "",
+                    "public_ip": "", "private_ip": "", "hostname": "",
+                    "iam_role": "", "instance_lifecycle": "",
+                    "spot_interruption": {"scheduled": False, "action": "", "notice_time": ""},
+                    "cpu_credits": {}, "ebs_volumes": [],
+                },
+                status="error", error=str(exc),
             )
