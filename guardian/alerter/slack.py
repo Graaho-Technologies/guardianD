@@ -7,6 +7,7 @@ import requests
 
 from ..config.schema import SlackConfig
 from ..utils.logger import get_logger
+from ..utils.retry import retry
 from .base import Alert, AlertSeverity, BaseAlerter
 
 _log = get_logger(__name__)
@@ -34,6 +35,19 @@ class SlackAlerter(BaseAlerter):
 
     def is_enabled(self) -> bool:
         return self.config.enabled
+
+    @retry(max_attempts=3, backoff_seconds=2.0, exceptions=(Exception,))
+    def _send_with_retry(self, payload: dict) -> bool:
+        resp = requests.post(
+            self.config.webhook_url,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            timeout=10,
+        )
+        if 200 <= resp.status_code < 300:
+            return True
+        _log.error("slack send failed: %s %s", resp.status_code, resp.text[:200])
+        return False
 
     def send(self, alert: Alert) -> bool:
         if not self.config.enabled:
@@ -86,16 +100,7 @@ class SlackAlerter(BaseAlerter):
                 ],
             }
 
-            resp = requests.post(
-                self.config.webhook_url,
-                data=json.dumps(payload),
-                headers={"Content-Type": "application/json"},
-                timeout=10,
-            )
-            if 200 <= resp.status_code < 300:
-                return True
-            _log.error("slack send failed: %s %s", resp.status_code, resp.text[:200])
-            return False
+            return self._send_with_retry(payload)
         except Exception as exc:
             _log.error("slack send error: %s", exc)
             return False
