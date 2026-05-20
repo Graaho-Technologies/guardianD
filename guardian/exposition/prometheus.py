@@ -191,13 +191,20 @@ def _init_metrics(include_process: bool = False) -> bool:
         # Build Info — guardian_build → exposes guardian_build_info series
         _metrics["i_build"] = _i_plain("guardian_build", "GuardianD build info")
 
+        # Daemon start time — for uptime calculation
+        _metrics["g_start_time"] = _g("guardian_start_time_seconds", "Daemon start time (unix epoch)")
+
         _metrics_initialized = True
         _log.info("Prometheus metrics registry initialized")
         return True
 
 
+_start_time_set = False
+
+
 def update_metrics(snapshots: Dict[str, Any], label_values: Dict[str, str]) -> None:
     """Update all Prometheus gauges from current snapshots. Called every collection cycle."""
+    global _start_time_set
     if not _PROMETHEUS_AVAILABLE or not _metrics_initialized:
         return
 
@@ -208,6 +215,17 @@ def update_metrics(snapshots: Dict[str, Any], label_values: Dict[str, str]) -> N
     ]
 
     try:
+        import time as _time
+        if not _start_time_set:
+            _safe_set("g_start_time", lvs, _time.time())
+            _start_time_set = True
+            # Initialize counters so they appear in Prometheus even before first event
+            try:
+                _metrics["c_oom_kills"].labels(*lvs)
+                _metrics["c_dmesg_errors"].labels(*lvs, "err")
+            except Exception:
+                pass
+
         _update_cpu(snapshots.get("cpu"), lvs)
         _update_memory(snapshots.get("memory"), lvs)
         _update_disk(snapshots.get("disk"), lvs)
@@ -369,30 +387,26 @@ def _update_psi(snap: Any, lvs: List[str]) -> None:
     if not snap or not snap.metrics:
         return
     m = snap.metrics
-    if not m.get("psi_available", False):
-        return
-
-    psi = m.get("psi", {})
+    psi_available = m.get("psi_available", False)
+    psi = m.get("psi", {}) if psi_available else {}
     _PSI_WINDOWS = [("avg10", "some_avg10"), ("avg60", "some_avg60"), ("avg300", "some_avg300")]
     _PSI_FULL_WINDOWS = [("avg10", "full_avg10"), ("avg60", "full_avg60"), ("avg300", "full_avg300")]
 
     for resource, gauge_key in [("cpu", "g_psi_cpu"), ("memory", "g_psi_mem"), ("io", "g_psi_io")]:
         psi_r = psi.get(resource, {})
         for window, key in _PSI_WINDOWS:
-            val = psi_r.get(key, -1.0)
-            if val >= 0:
-                try:
-                    _metrics[gauge_key].labels(*lvs, window, "some").set(val / 100.0)
-                except Exception:
-                    pass
+            val = psi_r.get(key, 0.0) if psi_available else 0.0
+            try:
+                _metrics[gauge_key].labels(*lvs, window, "some").set(val / 100.0 if psi_available else 0.0)
+            except Exception:
+                pass
         if resource in ("memory", "io"):
             for window, key in _PSI_FULL_WINDOWS:
-                val = psi_r.get(key, -1.0)
-                if val >= 0:
-                    try:
-                        _metrics[gauge_key].labels(*lvs, window, "full").set(val / 100.0)
-                    except Exception:
-                        pass
+                val = psi_r.get(key, 0.0) if psi_available else 0.0
+                try:
+                    _metrics[gauge_key].labels(*lvs, window, "full").set(val / 100.0 if psi_available else 0.0)
+                except Exception:
+                    pass
 
 
 def _update_process(snap: Any, lvs: List[str]) -> None:
@@ -406,9 +420,16 @@ def _update_process(snap: Any, lvs: List[str]) -> None:
 
 def _update_ec2(snap: Any, lvs: List[str]) -> None:
     if not snap or not snap.metrics:
+        _safe_set("g_spot_interrupt", lvs, 0)
         return
     m = snap.metrics
     if not m.get("is_ec2", False):
+        # Not on EC2 — emit 0 so series exists in Prometheus
+        _safe_set("g_spot_interrupt", lvs, 0)
+        try:
+            _metrics["i_ec2"].labels(*lvs).info({"instance_id": "not-ec2", "instance_type": "local"})
+        except Exception:
+            pass
         return
     try:
         _metrics["i_ec2"].labels(*lvs).info({
