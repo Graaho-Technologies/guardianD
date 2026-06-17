@@ -541,8 +541,14 @@ Expected — those are Linux-only. Panels show 0, not an error.
 3. Is the Grafana data source URL `http://localhost:9090` (Prometheus), **not** `:9732`?
 4. Pick your host from the **Instance** dropdown.
 
-**`scripts/install.sh` fails**
-Known issue — it installs from PyPI, where this package isn't published. Use the [manual production steps](#production-install-linux--systemd) instead.
+**`pip install` says `does not provide the extra 'full'`, or `guardiand`/`guardianctl` are missing after install**
+You're on an old setuptools (`<61`, stock on Ubuntu/Debian) that can't read modern packaging metadata. Upgrade the build tooling first: `pip install --upgrade pip setuptools wheel`, then reinstall. (Releases since v0.1.0 ship a `setup.cfg` that works on old setuptools too, so a fresh clone shouldn't hit this.)
+
+**Leftover root-owned `build/` or `*.egg-info/` in the clone, or `Permission denied: build/lib/...` on a later build**
+Installing from the clone as root (`sudo pip install ".[full]"`, or `scripts/install.sh`) makes pip build inside the repo as root, leaving root-owned `build/` and `*.egg-info/` directories. They're git-ignored and harmless, but block a subsequent non-root build. Remove them with `sudo rm -rf build *.egg-info`.
+
+**`scripts/install.sh`**
+Installs from your **local clone** (the package isn't on PyPI) and must run as root: `sudo bash scripts/install.sh --full`. It installs the package, creates the directories, generates `/etc/guardian/guardian.yaml`, and installs + enables the systemd unit — the scripted equivalent of the [manual production steps](#production-install-linux--systemd).
 
 ---
 
