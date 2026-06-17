@@ -4,6 +4,12 @@ Documentation=https://github.com/your-org/guardiand
 After=network.target network-online.target
 Wants=network-online.target
 
+# Start-rate limiting belongs in [Unit], not [Service]. If placed under [Service],
+# systemd ignores it ("Unknown key name 'StartLimitIntervalSec'") and the crash-loop
+# guard never takes effect.
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
 [Service]
 Type=simple
 User=root
@@ -13,8 +19,6 @@ ExecReload=/bin/kill -HUP $MAINPID
 
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=10
 
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/guardian/guardian.env
