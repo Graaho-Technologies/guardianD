@@ -132,6 +132,42 @@ def test_cli_test_alert_not_enabled(mocker, cli_runner):
     assert "not enabled" in result.output
 
 
+def test_cli_setup_openai_writes_config(mocker, cli_runner, tmp_path):
+    import yaml
+    cfg = tmp_path / "guardian.yaml"
+    cfg.write_text("alerts:\n  telegram:\n    enabled: true\n")
+    r = MagicMock()
+    r.status_code = 200
+    r.json.return_value = {"choices": [{"message": {"content": "GuardianD AI connected."}}]}
+    mocker.patch("requests.post", return_value=r)
+    # prompts: api key, base url (default), model (default), min severity (default)
+    result = cli_runner.invoke(
+        cli, ["setup", "openai", "--config", str(cfg)], input="sk-test\n\n\n\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert "Verified" in result.output
+    data = yaml.safe_load(cfg.read_text())
+    assert data["ai"]["enabled"] is True
+    assert data["ai"]["api_key"] == "sk-test"
+    assert data["ai"]["model"] == "gpt-4o-mini"
+    # existing sections are preserved
+    assert data["alerts"]["telegram"]["enabled"] is True
+
+
+def test_cli_setup_openai_rejected_key_does_not_write(mocker, cli_runner, tmp_path):
+    cfg = tmp_path / "guardian.yaml"
+    cfg.write_text("alerts:\n  telegram:\n    enabled: true\n")
+    r = MagicMock()
+    r.status_code = 401
+    r.text = "unauthorized"
+    mocker.patch("requests.post", return_value=r)
+    result = cli_runner.invoke(
+        cli, ["setup", "openai", "--config", str(cfg)], input="bad-key\n\n\n\n"
+    )
+    assert "rejected" in result.output.lower()
+    assert "ai:" not in cfg.read_text()  # nothing written
+
+
 def test_cli_health_command(mocker, cli_runner):
     r = MagicMock()
     r.status_code = 200

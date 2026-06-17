@@ -460,6 +460,7 @@ guardianctl init --output ./guardian.yaml   # generate example config
 
 # Setup wizards
 guardianctl setup telegram                  # interactive Telegram setup
+guardianctl setup openai                    # interactive AI-alerts (OpenAI key) setup
 guardianctl setup grafana                   # Grafana/Prometheus guide
 
 # Prometheus helpers
@@ -551,6 +552,67 @@ intelligence:
 ```
 
 Anomaly alerts arrive on the same channels as threshold alerts, with a root-cause note attached.
+
+---
+
+## AI-assisted alerts (optional)
+
+Every alert already ships with a built-in plain-English **"What this means"** line. Turn on the **AI layer** and GuardianD goes a step further: it asks an LLM to interpret *this specific* alert and suggest **concrete, immediate fixes** ("check top processes with `ps aux --sort=-%mem`", "restart the worker", "scale the instance"). The suggestion is added to **every channel** — Telegram, Slack, Email, and the webhook JSON (`ai_suggestion`).
+
+It's **off by default** and needs an OpenAI (or OpenAI-compatible) API key. The quickest way to turn it on is the wizard — it prompts for the key, verifies it with a real test call, and writes the config for you:
+
+```bash
+guardianctl --config /etc/guardian/guardian.yaml setup openai
+```
+
+…or configure it by hand in `guardian.yaml`:
+
+```yaml
+ai:
+  enabled: true
+  provider: openai
+  api_key: ""                       # better: leave blank, use env GUARDIAN_OPENAI_API_KEY (or OPENAI_API_KEY)
+  base_url: https://api.openai.com/v1   # change for Azure / OpenAI-compatible gateways
+  model: gpt-4o-mini                # cheap + good; any chat model works
+  min_severity: WARN                # only spend tokens on alerts this severe or worse
+  include_metrics: true             # send the triggering metric values for sharper advice
+  cache_ttl_seconds: 1800           # reuse a suggestion for a repeating alert (saves cost)
+  timeout_seconds: 12
+  max_tokens: 250
+```
+
+Then keep the key out of the config file:
+
+```bash
+export GUARDIAN_OPENAI_API_KEY=sk-...     # or systemd: add to /etc/guardian/guardian.env
+guardianctl config reload                 # or: sudo systemctl restart guardian
+```
+
+With AI on, the **"What this means"** line itself is generated from *this alert's actual numbers* (not a generic template), and a **"Suggested fix"** block lists concrete next steps:
+
+```
+🚨 CRITICAL — Disk Space Critical: /
+
+Disk / at 96.2%
+
+💡 What this means: The root filesystem is 96.2% full; at 100% writes fail and
+   the database or app can crash or corrupt data.
+🎚 Severity: critical — act soon, user impact likely
+
+🤖 AI suggestion:
+1. Find the biggest dirs: `du -xhd1 / | sort -rh | head`
+2. Clear logs/journal: `journalctl --vacuum-size=200M`, rotate big logs
+3. If it's /var/lib/docker, prune: `docker system prune -af`
+
+🖥 Instance: ip-172-31-71-190
+🌍 Environment: production
+```
+
+The same AI interpretation + fix is attached to Slack, Email, and the webhook payload (`ai_meaning` / `ai_suggestion`).
+
+**Safety & cost:** the daemon never blocks or crashes on the AI call — it has a timeout, runs once per alert (shared across all channels), caches repeats, and **falls back to the built-in static hint** for "What this means" if the call fails or no key is set. `min_severity` and `cache_ttl_seconds` keep token spend low. The key is redacted from `guardianctl config show` and the REST `/config` endpoint.
+
+> Want a different provider? Point `base_url` at any OpenAI-compatible chat-completions endpoint (Azure OpenAI, a local gateway, etc.) and set `model` accordingly.
 
 ---
 

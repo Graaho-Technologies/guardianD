@@ -26,6 +26,18 @@ _COLORS = {
 }
 
 
+def _ai_blocks(alert: Alert) -> list:
+    """Slack section block(s) for the AI interpretation + fix steps, if present."""
+    parts = []
+    if alert.ai_meaning:
+        parts.append(f":robot_face: *What this means*\n{alert.ai_meaning}")
+    if alert.ai_suggestion:
+        parts.append(f"*Suggested fix*\n{alert.ai_suggestion}")
+    if not parts:
+        return []
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": "\n\n".join(parts)}}]
+
+
 class SlackAlerter(BaseAlerter):
     name = "slack"
 
@@ -94,7 +106,7 @@ class SlackAlerter(BaseAlerter):
                                     {"type": "mrkdwn", "text": f"*Category:*\n{alert.category}"},
                                 ],
                             },
-                        ],
+                        ] + _ai_blocks(alert),
                         "fields": metric_fields,
                     }
                 ],

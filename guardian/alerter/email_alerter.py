@@ -35,6 +35,7 @@ _HTML_TEMPLATE = """\
       <tr><td style="padding:4px 8px;">Time</td><td style="padding:4px 8px;">{timestamp}</td></tr>
     </table>
     <p style="margin-top:16px;">{message}</p>
+    {ai_block}
     <h3>Triggering Metrics</h3>
     <table style="border-collapse:collapse;width:100%;">
       <tr><th style="text-align:left;padding:4px 8px;background:#f5f5f5;">Metric</th><th style="text-align:left;padding:4px 8px;background:#f5f5f5;">Value</th></tr>
@@ -82,6 +83,21 @@ class EmailAlerter(BaseAlerter):
                 for k, v in list(alert.metrics.items())[:20]
             )
 
+            ai_block = ""
+            if alert.ai_meaning or alert.ai_suggestion:
+                import html as _html
+                inner = ""
+                if alert.ai_meaning:
+                    inner += "<strong>🤖 What this means</strong><br>" + \
+                        _html.escape(alert.ai_meaning).replace("\n", "<br>") + "<br><br>"
+                if alert.ai_suggestion:
+                    inner += "<strong>Suggested fix</strong><br>" + \
+                        _html.escape(alert.ai_suggestion).replace("\n", "<br>")
+                ai_block = (
+                    "<div style='margin-top:16px;padding:12px;background:#eef6ff;"
+                    "border-left:4px solid #2b7de9;'>" + inner + "</div>"
+                )
+
             html_body = _HTML_TEMPLATE.format(
                 color=color,
                 severity_emoji=emoji,
@@ -93,6 +109,7 @@ class EmailAlerter(BaseAlerter):
                 instance_type=alert.metrics.get("instance_type", ""),
                 timestamp=ts_human,
                 message=alert.message,
+                ai_block=ai_block,
                 metric_rows=metric_rows,
                 version=self.version,
             )

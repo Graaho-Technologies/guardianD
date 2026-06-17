@@ -88,6 +88,9 @@ def load_config(path: str) -> GuardianConfig:
         if "webhook" in alerts_raw:
             _merge(config.alerts.webhook, alerts_raw["webhook"])
 
+    if "ai" in raw:
+        _merge(config.ai, raw["ai"])
+
     if "app_health_checks" in raw:
         checks = []
         for item in raw["app_health_checks"]:
@@ -119,6 +122,11 @@ def _apply_env_overrides(config: GuardianConfig) -> None:
         config.alerts.email.smtp_password = env["GUARDIAN_EMAIL_PASSWORD"]
     if "GUARDIAN_API_TOKEN" in env:
         config.api.auth_token = env["GUARDIAN_API_TOKEN"]
+    # AI key: prefer GUARDIAN_-prefixed, fall back to the conventional OPENAI_API_KEY
+    if "GUARDIAN_OPENAI_API_KEY" in env:
+        config.ai.api_key = env["GUARDIAN_OPENAI_API_KEY"]
+    elif "OPENAI_API_KEY" in env and not config.ai.api_key:
+        config.ai.api_key = env["OPENAI_API_KEY"]
     if "GUARDIAN_INSTANCE_NAME" in env:
         config.instance_name = env["GUARDIAN_INSTANCE_NAME"]
     if "GUARDIAN_ENVIRONMENT" in env:
@@ -152,6 +160,13 @@ def validate_config(config: GuardianConfig) -> List[str]:
     any_enabled = slack.enabled or tg.enabled or em.enabled or config.alerts.webhook.enabled
     if not any_enabled:
         errors.append("At least one alert channel must be enabled")
+
+    ai = config.ai
+    if ai.enabled and not ai.api_key:
+        errors.append(
+            "ai.enabled=true but api_key is empty "
+            "(set it in config, or via env GUARDIAN_OPENAI_API_KEY / OPENAI_API_KEY)"
+        )
 
     if config.collector.interval_seconds < 5:
         errors.append("collector.interval_seconds must be >= 5")
@@ -359,6 +374,23 @@ alerts:
     url: "https://your-webhook-endpoint.com/guardian"
     secret: ""
     min_severity: "CRITICAL"
+
+# AI-assisted alerts (optional). When enabled, every alert gets a short
+# plain-English interpretation + concrete quick-fix steps on ALL channels.
+# Needs an OpenAI (or OpenAI-compatible) API key. Off by default; if a call
+# fails, alerts still send with the built-in static hints.
+ai:
+  enabled: false
+  provider: "openai"
+  # Env override: GUARDIAN_OPENAI_API_KEY (or the standard OPENAI_API_KEY)
+  api_key: ""
+  base_url: "https://api.openai.com/v1"   # change for Azure / compatible gateways
+  model: "gpt-4o-mini"
+  timeout_seconds: 12
+  max_tokens: 250
+  include_metrics: true                    # send triggering metric values for context
+  min_severity: "WARN"                     # only enrich alerts at/above this severity
+  cache_ttl_seconds: 1800                  # reuse a suggestion for a repeating alert
 
 intelligence:
   enabled: true

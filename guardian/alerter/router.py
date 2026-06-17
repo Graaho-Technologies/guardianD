@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from ..collector.base import MetricSnapshot
 from ..config.schema import GuardianConfig
 from ..utils.logger import get_logger
+from .ai import AIEnricher
 from .base import Alert, AlertSeverity, BaseAlerter, make_fingerprint
 
 _log = get_logger(__name__)
@@ -63,6 +64,7 @@ class AlertRouter:
     def __init__(self, config: GuardianConfig, alerters: List[BaseAlerter]) -> None:
         self.config = config
         self.alerters = alerters
+        self._ai = AIEnricher(config.ai)
         # fingerprint → (alert, first_seen_ts, last_sent_ts)
         self._active: Dict[str, Tuple[Alert, float, float]] = {}
 
@@ -474,6 +476,12 @@ class AlertRouter:
 
         max_per_dispatch = self.config.alerts.max_alerts_per_dispatch
         batch = to_send[:max_per_dispatch]
+        # Enrich once per alert (shared across all channels) before sending.
+        # No-op unless AI is enabled; never raises.
+        try:
+            self._ai.enrich_batch(batch)
+        except Exception as exc:
+            _log.error("AI enrich_batch error: %s", exc)
         if self.config.alerts.group_alerts and len(batch) > 1:
             self._send_grouped(batch)
         else:

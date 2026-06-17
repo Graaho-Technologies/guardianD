@@ -36,6 +36,8 @@ class Alert:
     is_recovery: bool = False
     anomaly_score: float = 0.0
     forecast_eta_minutes: float = 0.0
+    ai_meaning: str = ""     # optional AI-generated, metric-aware "what this means"
+    ai_suggestion: str = ""  # optional AI-generated quick-fix steps
 
 
 class BaseAlerter(ABC):

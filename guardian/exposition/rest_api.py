@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-_REDACT = {"webhook_url", "bot_token", "chat_id", "smtp_password", "auth_token", "secret"}
+_REDACT = {"webhook_url", "bot_token", "chat_id", "smtp_password", "auth_token", "secret", "api_key"}
 
 
 def _redact_config(obj: Any) -> Any:

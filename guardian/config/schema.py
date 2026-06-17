@@ -135,6 +135,27 @@ class AlertConfig:
 
 
 @dataclass
+class AIConfig:
+    """AI-assisted alert interpretation + remediation, applied to all channels.
+
+    Off by default. When enabled, each alert is enriched once with a short
+    plain-English interpretation and concrete quick-fix steps, then rendered on
+    every channel. Calls an OpenAI-compatible chat API via plain HTTP. If the
+    call fails or is disabled, alerts fall back to the built-in static hints.
+    """
+    enabled: bool = False
+    provider: str = "openai"
+    api_key: str = ""                              # env override: GUARDIAN_OPENAI_API_KEY / OPENAI_API_KEY
+    base_url: str = "https://api.openai.com/v1"    # override for Azure / OpenAI-compatible gateways
+    model: str = "gpt-4o-mini"
+    timeout_seconds: int = 12
+    max_tokens: int = 250
+    include_metrics: bool = True                   # send triggering metric values for better context
+    min_severity: str = "WARN"                     # only enrich alerts at/above this severity (cost control)
+    cache_ttl_seconds: int = 1800                  # reuse a suggestion for a repeating alert within this window
+
+
+@dataclass
 class AppHealthCheck:
     name: str = ""
     type: str = "http"
@@ -206,6 +227,7 @@ class GuardianConfig:
     collector: CollectorConfig = field(default_factory=CollectorConfig)
     thresholds: ThresholdConfig = field(default_factory=ThresholdConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
+    ai: AIConfig = field(default_factory=AIConfig)
     intelligence: IntelligenceConfig = field(default_factory=IntelligenceConfig)
     app_health_checks: List[AppHealthCheck] = field(default_factory=list)
     storage: StorageConfig = field(default_factory=StorageConfig)

@@ -892,6 +892,111 @@ def setup_telegram(config_path: str) -> None:
         console.print("  Run [bold]guardianctl init --output /path/to/guardian.yaml[/] first.")
 
 
+@setup_group.command("openai")
+@click.option("--config", "config_path", default=_DEFAULT_CONFIG, help="Config file to update")
+def setup_openai(config_path: str) -> None:
+    """Interactive wizard: configure AI-assisted alerts (OpenAI key) step-by-step."""
+    console.print(Panel.fit(
+        "[bold cyan]GuardianD — AI Alert Setup Wizard[/]\n\n"
+        "Adds a plain-English interpretation + quick-fix steps to every alert,\n"
+        "on all channels. You need an OpenAI (or OpenAI-compatible) API key.\n"
+        "Steps:\n"
+        "  1. Get a key at [bold]platform.openai.com/api-keys[/]\n"
+        "  2. Paste it below — we'll verify it with a real test call\n"
+        "  (For Azure / a local gateway, change the base URL when asked.)",
+        title="Setup"
+    ))
+
+    api_key = click.prompt("\nPaste your API key", hide_input=True).strip()
+    if not api_key:
+        console.print("[red]No key entered.[/]")
+        return
+    base_url = click.prompt("API base URL", default="https://api.openai.com/v1").strip().rstrip("/")
+    model = click.prompt("Model", default="gpt-4o-mini").strip()
+    min_severity = click.prompt(
+        "Minimum severity to enrich",
+        type=click.Choice(["INFO", "WARN", "CRITICAL", "EMERGENCY"]),
+        default="WARN",
+    )
+
+    # Validate by making a real (tiny) chat completion — proves key + model + endpoint.
+    console.print("\n[dim]Verifying key with a test request...[/]")
+    try:
+        resp = requests.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with exactly: GuardianD AI connected."}],
+                "max_tokens": 20,
+                "temperature": 0,
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        console.print(f"[red]Could not reach the API:[/] {e}")
+        return
+
+    if resp.status_code == 401:
+        console.print("[red]Key rejected (401 Unauthorized).[/] Double-check the key and try again.")
+        return
+    if resp.status_code != 200:
+        try:
+            err = resp.json().get("error", {}).get("message", resp.text[:200])
+        except Exception:
+            err = resp.text[:200]
+        console.print(f"[red]API error ({resp.status_code}):[/] {err}")
+        console.print("[yellow]If you're on Azure/a gateway, check the base URL and model name.[/]")
+        return
+    try:
+        reply = resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        reply = "(ok)"
+    console.print(f"[green]✓ Verified.[/] Model [bold]{model}[/] replied: [dim]{reply}[/]")
+
+    # Update config file
+    if os.path.exists(config_path):
+        try:
+            import yaml
+            with open(config_path) as f:
+                cfg_data = yaml.safe_load(f) or {}
+            cfg_data["ai"] = {
+                "enabled": True,
+                "provider": "openai",
+                "api_key": api_key,
+                "base_url": base_url,
+                "model": model,
+                "timeout_seconds": 12,
+                "max_tokens": 250,
+                "include_metrics": True,
+                "min_severity": min_severity,
+                "cache_ttl_seconds": 1800,
+            }
+            with open(config_path, "w") as f:
+                yaml.dump(cfg_data, f, default_flow_style=False, allow_unicode=True)
+            try:
+                os.chmod(config_path, 0o600)
+            except OSError:
+                pass
+            console.print(f"\n[green]✓ Config updated:[/] {config_path} [dim](chmod 600 — holds a secret)[/]")
+            console.print("  Reload daemon:  [bold]guardianctl config reload[/]")
+            console.print("  Test alert:     [bold]guardianctl test-alert --severity CRITICAL[/]")
+            console.print(
+                "\n[dim]Prefer to keep the key out of the file? Remove api_key from the config and set\n"
+                "  export GUARDIAN_OPENAI_API_KEY=… (env wins over the file).[/]"
+            )
+        except Exception as e:
+            console.print(f"\n[yellow]Could not update config:[/] {e}")
+            console.print(f"Add manually to {config_path} under a top-level [bold]ai:[/] section:")
+            console.print("  enabled: true")
+            console.print(f"  api_key: {api_key}")
+            console.print(f"  base_url: {base_url}")
+            console.print(f"  model: {model}")
+    else:
+        console.print(f"\n[yellow]Config file not found:[/] {config_path}")
+        console.print("  Run [bold]guardianctl init --output /path/to/guardian.yaml[/] first.")
+
+
 @setup_group.command("grafana")
 @click.pass_context
 def setup_grafana(ctx: click.Context) -> None:

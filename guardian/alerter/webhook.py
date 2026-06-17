@@ -46,6 +46,8 @@ class WebhookAlerter(BaseAlerter):
                 "timestamp_iso": ts_iso,
                 "is_recovery": alert.is_recovery,
                 "fingerprint": alert.fingerprint,
+                "ai_meaning": alert.ai_meaning,
+                "ai_suggestion": alert.ai_suggestion,
             }
             body = json.dumps(payload)
             headers = {"Content-Type": "application/json"}
