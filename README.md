@@ -58,6 +58,26 @@ Beginners: do the **[Minimal setup](#minimal-setup-5-minutes-any-os)** first. Ad
 
 ---
 
+## What GuardianD watches
+
+Every ~10 seconds GuardianD takes a full snapshot of the machine. It collects **far more than CPU/RAM/disk** — it watches the subtle, early-warning signals that usually predict an outage (CPU steal, swap-out rate, file-descriptor exhaustion, TCP connection leaks, disk latency, kernel pressure stalls, spot-termination notices…). Each area below is collected on every cycle; the right-hand column lists the conditions that turn into an alert.
+
+| Area | What it measures (plain English) | Alerts it can raise |
+|------|----------------------------------|---------------------|
+| **CPU** | Total & per-core usage, load average (normalised per core), and the *breakdown* of CPU time: user/system/idle, **iowait** (waiting on disk), **steal** (CPU taken by the AWS hypervisor), softirq. Plus context-switch & interrupt rates and clock speed. | High/critical CPU, **EC2 CPU steal** (noisy neighbour), **high I/O-wait** (disk bottleneck), high system load |
+| **Memory** | RAM used/available/cached, **swap** usage *and* swap-in/out rate, **OOM-kill** count, dirty/writeback pages, hugepages, and **file-descriptor** usage vs the system limit. | High/critical memory, swap elevated, active swap-out, excessive dirty pages, **FD exhaustion**, **OOM kill** (emergency) |
+| **Disk** | Per mount: space used **and inodes** used. Per physical disk: read/write throughput, IOPS, **latency (await)** and utilisation %, with disk-type detection (NVMe / EBS / SSD / HDD) so latency thresholds fit the hardware. | Disk space warning/critical, **inode exhaustion**, high/critical disk latency |
+| **Network** | Per interface: throughput, packet rates, **errors & drops**. Full **TCP connection-state** census (ESTABLISHED, TIME_WAIT, **CLOSE_WAIT**, SYN_RECV…), retransmit/reset rates, socket stats, and **DNS resolution latency**. | **CLOSE_WAIT buildup** (socket leak), **SYN_RECV flood**, network error/drop rate, **DNS failing** |
+| **Processes** | Total count by state, **zombies**, **disk-sleep (D-state)** processes, and the top-N by CPU and by memory (with command line, RSS, threads, FDs). | Zombie accumulation, processes stuck in uninterruptible sleep |
+| **EC2 / instance** | Instance ID, type, region/AZ, AMI, public/private IP, IAM role, EBS volumes, lifecycle, and the **spot-interruption notice** (via IMDSv2). Times out cleanly and marks `is_ec2: false` off AWS. | **Spot termination notice — 2 min warning** (emergency) |
+| **System events** | `dmesg` kernel errors, **OOM-kill** events, **failed systemd units**, kernel version, uptime, and **PSI pressure-stall** info for CPU/memory/IO (kernel 4.20+) — the most reliable "the box is actually struggling" signal. | Failed systemd unit, kernel critical event, **CPU/memory/IO pressure stalls** |
+| **App health** | Your own services, checked the way *you* define: `http` (status code), `port` (TCP connect), `process` (by name), or `systemd_service` (is-active). | Health-check failed (critical or warning, your choice) |
+| **Intelligence** *(optional, needs numpy)* | Learns a rolling baseline per metric, then flags statistical **anomalies**, sudden spikes, and trends ("disk full in ~3h"). | Anomaly / forecast alerts on the same channels |
+
+**How an alert reaches you:** when a threshold is crossed, GuardianD routes the alert to your channels (Telegram/Slack/Email/Webhook) with severity-based filtering, de-duplication, a cooldown so you aren't spammed, escalation of unresolved warnings, and recovery ("✅ Recovered") notes. **Every Telegram alert is written to be understood by anyone** — it includes a plain-English **"What this means"** line and a **severity** explanation (e.g. *emergency — act immediately*) alongside the raw numbers, so you don't need to be an SRE to know whether to worry. All thresholds are tunable in `guardian.yaml` (see [Custom alert thresholds](#custom-alert-thresholds)).
+
+---
+
 ## Minimal setup (5 minutes, any OS)
 
 This gets you `guardiand` running with Telegram alerts. No root, no systemd, no prometheus.
@@ -253,6 +273,28 @@ alerts:
     bot_token: "7123456789:AAF..."   # or env GUARDIAN_TELEGRAM_TOKEN
     chat_id: "123456789"             # or env GUARDIAN_TELEGRAM_CHAT_ID
     min_severity: WARN               # INFO | WARN | CRITICAL | EMERGENCY
+```
+
+A delivered alert is written to be understood by anyone — the raw numbers come
+with a plain-English **What this means** line and a **Severity** explanation:
+
+```
+🚨 CRITICAL — Severe EC2 CPU Steal — Noisy Neighbor
+
+CPU steal at 23.4%
+
+💡 What this means: The AWS hypervisor is giving this VM less CPU than it
+   asked for (a 'noisy neighbour' on the same host). Your apps slow down even
+   though your own load looks fine — consider a larger or dedicated instance.
+🎚 Severity: critical — act soon, user impact likely
+
+🖥 Instance: ip-172-31-71-190
+🌍 Environment: production
+🕐 Time: 2026-06-17 09:33:59 UTC
+
+Triggering Metrics:
+• cpu_steal_percent: 23.4
+• instance_type: t3.medium
 ```
 
 ### Slack

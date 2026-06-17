@@ -8,6 +8,7 @@ import requests
 from ..config.schema import TelegramConfig
 from ..utils.logger import get_logger
 from .base import Alert, AlertSeverity, BaseAlerter
+from .explain import impact_hint, severity_meaning
 
 _log = get_logger(__name__)
 
@@ -61,6 +62,8 @@ class TelegramAlerter(BaseAlerter):
             text = (
                 f"{prefix}{emoji} *{alert.severity.name}* — {escape_mdv2(alert.title)}\n\n"
                 f"{escape_mdv2(alert.message)}\n\n"
+                f"💡 *What this means*: {escape_mdv2(impact_hint(alert))}\n"
+                f"🎚 *Severity*: {escape_mdv2(severity_meaning(alert.severity))}\n\n"
                 f"🖥 *Instance*: `{escape_mdv2(alert.instance_name)}`\n"
                 f"🌍 *Environment*: `{escape_mdv2(alert.environment)}`\n"
                 f"🕐 *Time*: {escape_mdv2(ts_human)}\n"
