@@ -107,6 +107,9 @@ Tests updated (structured result + unformatted-reply fallback). Verified live: a
 ### Issue 6 (FIXED) — `setup openai` leaked the key when it couldn't write a root-owned config
 Running `guardianctl setup openai` against the root-owned `/etc/guardian/guardian.yaml` *without* sudo verified the key, then failed to write and **printed the raw API key** in the "add manually" fallback. Fixed: (1) fail fast with a `sudo` hint *before* prompting for the key if the config isn't writable; (2) on a later `PermissionError`/write failure, never echo the key — point at sudo or the `GUARDIAN_OPENAI_API_KEY` env var instead. Real key that got printed during this incident should be rotated.
 
+### Switched AI key to env-file (out of the config) + relaxed validation
+After the key exposure, moved the AI key out of `guardian.yaml` into `/etc/guardian/guardian.env` (root:root, 600), which the systemd unit already loads via `EnvironmentFile=-`. Set `ai.api_key: ""` in the yaml (key now comes from `GUARDIAN_OPENAI_API_KEY`). Relaxed `validate_config`: `ai.enabled` without a key is **no longer a hard error** — AI is optional and must never block daemon startup (the enricher logs a warning and stays disabled; alerts still send). Verified: daemon restarts clean with `ai.enabled=true` and no key yet (AI off). User adds the new key to the env file, then `systemctl restart guardian` turns AI on.
+
 ### Setup wizard: `guardianctl setup openai`
 Mirrors `setup telegram`. Prompts for the API key (hidden input), base URL, model, and min-severity; **verifies with a real test chat-completion**; on success writes the `ai:` block and `chmod 600`s the config (and reminds about the env-var option); on 401/other error it reports clearly and writes nothing. Tests in `tests/test_cli.py` (happy path + rejected key). Live-smoke against real OpenAI with a bogus key → clean "Key rejected (401)", config untouched.
 

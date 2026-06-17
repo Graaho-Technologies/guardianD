@@ -161,12 +161,10 @@ def validate_config(config: GuardianConfig) -> List[str]:
     if not any_enabled:
         errors.append("At least one alert channel must be enabled")
 
-    ai = config.ai
-    if ai.enabled and not ai.api_key:
-        errors.append(
-            "ai.enabled=true but api_key is empty "
-            "(set it in config, or via env GUARDIAN_OPENAI_API_KEY / OPENAI_API_KEY)"
-        )
+    # NOTE: ai.enabled without a key is intentionally NOT a hard error. AI is an
+    # optional enhancement and must never prevent the daemon from starting; when no
+    # key is available (e.g. the GUARDIAN_OPENAI_API_KEY env-file isn't in place yet)
+    # the enricher logs a warning and stays disabled, and alerts still send.
 
     if config.collector.interval_seconds < 5:
         errors.append("collector.interval_seconds must be >= 5")
