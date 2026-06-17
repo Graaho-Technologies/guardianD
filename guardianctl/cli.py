@@ -907,6 +907,16 @@ def setup_openai(config_path: str) -> None:
         title="Setup"
     ))
 
+    # Fail fast (before asking for the key) if we can't write the config — e.g. a
+    # root-owned /etc/guardian/guardian.yaml run without sudo.
+    if os.path.exists(config_path) and not os.access(config_path, os.W_OK):
+        console.print(
+            f"\n[red]Cannot write {config_path}[/] — permission denied "
+            "(the config is likely root-owned). Re-run with sudo:\n"
+            f"  [bold]sudo guardianctl setup openai --config {config_path}[/]"
+        )
+        return
+
     api_key = click.prompt("\nPaste your API key", hide_input=True).strip()
     if not api_key:
         console.print("[red]No key entered.[/]")
@@ -985,13 +995,22 @@ def setup_openai(config_path: str) -> None:
                 "\n[dim]Prefer to keep the key out of the file? Remove api_key from the config and set\n"
                 "  export GUARDIAN_OPENAI_API_KEY=… (env wins over the file).[/]"
             )
+        except PermissionError:
+            console.print(
+                f"\n[red]Permission denied writing {config_path}.[/] "
+                "Re-run with sudo:\n"
+                f"  [bold]sudo guardianctl setup openai --config {config_path}[/]\n"
+                "[dim]Your key was verified but NOT written or shown.[/]"
+            )
         except Exception as e:
+            # Never echo the API key to the terminal/logs.
             console.print(f"\n[yellow]Could not update config:[/] {e}")
-            console.print(f"Add manually to {config_path} under a top-level [bold]ai:[/] section:")
-            console.print("  enabled: true")
-            console.print(f"  api_key: {api_key}")
-            console.print(f"  base_url: {base_url}")
-            console.print(f"  model: {model}")
+            console.print(
+                f"Enable it manually: add a top-level [bold]ai:[/] section to {config_path} "
+                "with [bold]enabled: true[/], your model and base_url, and the API key — "
+                "ideally via the env var [bold]GUARDIAN_OPENAI_API_KEY[/] rather than in the file. "
+                "[dim](Key not printed for safety.)[/]"
+            )
     else:
         console.print(f"\n[yellow]Config file not found:[/] {config_path}")
         console.print("  Run [bold]guardianctl init --output /path/to/guardian.yaml[/] first.")
