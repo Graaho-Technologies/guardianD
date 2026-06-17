@@ -348,6 +348,36 @@ guardianctl test-alert --channel all --severity CRITICAL
 
 ---
 
+## Secrets & environment variables
+
+Every secret can live in `guardian.yaml` **or** be supplied via an environment variable — **the environment always wins**. On a systemd box this lets you keep secrets out of the world-readable-ish config file entirely: leave the field blank (`""`) in `guardian.yaml` and put the value in an env file instead.
+
+The shipped unit already loads `/etc/guardian/guardian.env` (`EnvironmentFile=-/etc/guardian/guardian.env`), so anything you put there becomes an environment variable for the daemon:
+
+```bash
+sudo install -m 600 -o root -g root config/guardian.env.example /etc/guardian/guardian.env
+sudo nano /etc/guardian/guardian.env        # fill in the values you use
+sudo systemctl restart guardian             # env changes need a restart (not just config reload)
+```
+
+| Variable | Overrides | Used for |
+|----------|-----------|----------|
+| `GUARDIAN_SLACK_WEBHOOK` | `alerts.slack.webhook_url` | Slack |
+| `GUARDIAN_TELEGRAM_TOKEN` | `alerts.telegram.bot_token` | Telegram |
+| `GUARDIAN_TELEGRAM_CHAT_ID` | `alerts.telegram.chat_id` | Telegram |
+| `GUARDIAN_EMAIL_PASSWORD` | `alerts.email.smtp_password` | Email |
+| `GUARDIAN_API_TOKEN` | `api.auth_token` | REST API bearer auth |
+| `GUARDIAN_OPENAI_API_KEY` *(or `OPENAI_API_KEY`)* | `ai.api_key` | AI-assisted alerts |
+| `GUARDIAN_INSTANCE_NAME` | `instance_name` | Identity label |
+| `GUARDIAN_ENVIRONMENT` | `environment` | Identity label |
+
+Notes:
+- **`chmod 600`** the env file (and any config file holding a secret) — it's root-only and the daemon runs as root.
+- Env vars are read when the daemon **(re)loads config**, so a `systemctl restart` (or daemon start) picks them up; a bare `guardianctl config reload` re-reads the file but only the daemon's own environment, so prefer a restart after editing the env file.
+- Secrets are redacted from `guardianctl config show` and the REST `/config` endpoint regardless of where they come from.
+
+---
+
 ## Optional: dashboards (Prometheus + Grafana)
 
 Skip this entirely unless you want web graphs and metric history. Reminder: these are **two separate programs** you download yourself; GuardianD just feeds them.

@@ -1,6 +1,7 @@
 include LICENSE
 include README.md
 include config/guardian.example.yaml
+include config/guardian.env.example
 include systemd/guardian.service
 include grafana/dashboard.json
 recursive-include scripts *.sh
