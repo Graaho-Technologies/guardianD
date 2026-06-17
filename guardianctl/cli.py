@@ -346,10 +346,36 @@ def alerts(ctx: click.Context, since: Optional[str], severity: Optional[str], li
 def test_alert(ctx: click.Context, channel: str, severity: str) -> None:
     """Fire a test alert."""
     result = _post(ctx, "/api/v1/alerts/test", {"severity": severity, "channel": channel})
-    if result and result.get("sent"):
-        console.print(f"[green]Test alert sent to {result.get('channel')}[/]")
-    else:
+    if not result:
+        ctx.exit(1)
+
+    results = result.get("results")
+    if not isinstance(results, dict):
+        # Older daemon without per-channel reporting: fall back to the boolean.
+        if result.get("sent"):
+            console.print(f"[green]Test alert sent to {result.get('channel')}[/]")
+            return
         console.print("[red]Test alert failed to send[/]")
+        ctx.exit(1)
+
+    if not results:
+        console.print(f"[red]No enabled channel matches '{channel}'.[/]")
+        ctx.exit(1)
+
+    labels = {
+        "sent": "[green]✓ sent[/]",
+        "failed": "[red]✗ failed[/]",
+        "skipped_below_severity": f"[yellow]– skipped (below this channel's min_severity, alert was {severity})[/]",
+        "not_enabled": "[yellow]– not enabled[/]",
+    }
+    for name, outcome in results.items():
+        console.print(f"  {name}: {labels.get(outcome, outcome)}")
+
+    if any(o == "failed" for o in results.values()):
+        ctx.exit(1)
+    if not any(o == "sent" for o in results.values()):
+        # Nothing actually delivered (all skipped / not enabled).
+        ctx.exit(1)
 
 
 # --- Health Checks ---

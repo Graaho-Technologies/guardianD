@@ -252,17 +252,24 @@ class _Handler(BaseHTTPRequestHandler):
             fingerprint="test-alert",
         )
 
-        sent = False
-        for alerter in (daemon.alerters or []):
-            if channel not in ("all", alerter.name):
+        # Report a distinct per-channel outcome instead of collapsing
+        # "delivered", "below severity threshold", "failed" and "no such
+        # channel" into a single boolean. daemon.alerters only contains
+        # *enabled* channels, so an unmatched named channel is disabled/absent.
+        results: Dict[str, str] = {}
+        candidates = [a for a in (daemon.alerters or []) if channel in ("all", a.name)]
+        if channel != "all" and not candidates:
+            results[channel] = "not_enabled"
+        for alerter in candidates:
+            if not alerter.meets_severity_threshold(test_alert):
+                results[alerter.name] = "skipped_below_severity"
                 continue
             try:
-                ok = alerter.send(test_alert)
-                if ok:
-                    sent = True
+                results[alerter.name] = "sent" if alerter.send(test_alert) else "failed"
             except Exception:
-                pass
-        self._json_response({"sent": sent, "channel": channel})
+                results[alerter.name] = "failed"
+        sent = any(v == "sent" for v in results.values())
+        self._json_response({"sent": sent, "channel": channel, "results": results})
 
     def _handle_health_checks(self, daemon: Any) -> None:
         snap = (daemon._last_snapshots or {}).get("app_health")

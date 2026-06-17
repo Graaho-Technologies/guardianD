@@ -68,6 +68,70 @@ def test_cli_alerts_command(mocker, cli_runner):
     assert result.exit_code == 0
 
 
+def _mock_post_response(payload):
+    r = MagicMock()
+    r.status_code = 200
+    r.json.return_value = payload
+    r.raise_for_status = MagicMock()
+    return r
+
+
+def test_cli_test_alert_sent(mocker, cli_runner):
+    mocker.patch(
+        "requests.post",
+        return_value=_mock_post_response({"sent": True, "channel": "telegram",
+                                          "results": {"telegram": "sent"}}),
+    )
+    result = cli_runner.invoke(
+        cli, ["--api-url", "http://127.0.0.1:9731", "test-alert", "--channel", "telegram"]
+    )
+    assert result.exit_code == 0
+    assert "telegram" in result.output and "sent" in result.output
+
+
+def test_cli_test_alert_failed_exits_nonzero(mocker, cli_runner):
+    mocker.patch(
+        "requests.post",
+        return_value=_mock_post_response({"sent": False, "channel": "telegram",
+                                          "results": {"telegram": "failed"}}),
+    )
+    result = cli_runner.invoke(
+        cli, ["--api-url", "http://127.0.0.1:9731", "test-alert", "--channel", "telegram"]
+    )
+    assert result.exit_code == 1
+    assert "failed" in result.output
+
+
+def test_cli_test_alert_below_severity_is_not_failure_message(mocker, cli_runner):
+    # An INFO alert to a WARN-min channel is "skipped", not "failed" — but nothing
+    # was delivered, so the exit code is still non-zero.
+    mocker.patch(
+        "requests.post",
+        return_value=_mock_post_response({"sent": False, "channel": "telegram",
+                                          "results": {"telegram": "skipped_below_severity"}}),
+    )
+    result = cli_runner.invoke(
+        cli, ["--api-url", "http://127.0.0.1:9731", "test-alert",
+              "--channel", "telegram", "--severity", "INFO"]
+    )
+    assert result.exit_code == 1
+    assert "skipped" in result.output
+    assert "failed" not in result.output
+
+
+def test_cli_test_alert_not_enabled(mocker, cli_runner):
+    mocker.patch(
+        "requests.post",
+        return_value=_mock_post_response({"sent": False, "channel": "slack",
+                                          "results": {"slack": "not_enabled"}}),
+    )
+    result = cli_runner.invoke(
+        cli, ["--api-url", "http://127.0.0.1:9731", "test-alert", "--channel", "slack"]
+    )
+    assert result.exit_code == 1
+    assert "not enabled" in result.output
+
+
 def test_cli_health_command(mocker, cli_runner):
     r = MagicMock()
     r.status_code = 200
