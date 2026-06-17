@@ -1,154 +1,276 @@
 # GuardianD
 
-Production-grade EC2 instance observability daemon. Runs as a systemd service on Linux or standalone on macOS. Collects system metrics every 10 seconds, detects anomalies, fires alerts to Telegram/Slack/Email, and serves a Prometheus `/metrics` endpoint for Grafana dashboards — no Datadog, no CloudWatch agent, no Node Exporter required.
+A lightweight observability daemon for a single Linux/macOS/Windows machine (built for EC2, works anywhere). It watches CPU, memory, disk, network, processes, and your own services, then alerts you on Telegram / Slack / Email when something breaks — no Datadog, no CloudWatch agent, no Node Exporter.
 
-## What It Does
-
-| Layer | What you get |
-|---|---|
-| **Collectors** | CPU, memory, disk, network, processes, EC2 metadata, system events, app health |
-| **Intelligence** | Anomaly detection (z-score), velocity spikes, trend forecasting, bottleneck fingerprinting |
-| **Alerts** | Threshold + anomaly alerts → Telegram, Slack, Email, Webhook. Cooldown, escalation, recovery |
-| **Prometheus** | `/metrics` endpoint on `:9732`, 67+ metrics, Grafana dashboard included |
-| **CLI** | `guardianctl` — live status, metrics, alerts, logs, config, test alerts |
-
-## Architecture
-
-```
-Collectors (threaded, every 10s)
-  cpu · memory · disk · network · process · ec2 · system_events · app_health
-        │
-        ▼
-Intelligence Layer (numpy, optional)
-  BaselineEngine → AnomalyDetector → VelocityDetector → TrendForecaster → BottleneckFingerprinter
-        │
-        ▼
-AlertRouter (threshold eval + dedup + cooldown + escalation + recovery)
-        │
-        ├─→ Telegram · Slack · Email · Webhook
-        ├─→ SQLite (metric_snapshots, alerts, baselines)
-        ├─→ JSONL rotating logs
-        ├─→ Prometheus :9732/metrics ←── Prometheus Server ←── Grafana
-        └─→ REST API :9731 ←── guardianctl CLI
-```
+If you only read one thing, read **[The 4 moving parts](#the-4-moving-parts)** below. Most confusion comes from not knowing which pieces are required and which are optional.
 
 ---
 
-## Prerequisites
+## The 4 moving parts
 
-- Python 3.9+
-- Linux (systemd, full feature set) or macOS (dev/testing)
-- Root access for production install (PID file, heartbeat)
-- `numpy` and `prometheus-client` for intelligence + Grafana (included in `full` extras)
+GuardianD is **one program** (`guardiand`). The other three names you keep seeing are separate tools that plug into it. Here is the whole picture:
+
+```
+   THE MACHINE YOU WANT TO MONITOR
+   ┌─────────────────────────────────────────────────┐
+   │  guardiand   ◄── THE ENGINE. The only required    │
+   │                  piece. Runs forever.             │
+   │   • collects CPU/mem/disk/net every 10s           │
+   │   • fires alerts → Telegram / Slack / Email       │
+   │   • stores metrics in SQLite + log files          │
+   │   • opens TWO local HTTP ports:                   │
+   │        :9731  REST API   ──►  guardianctl         │
+   │        :9732  /metrics   ──►  prometheus          │
+   └──────────┬────────────────────────┬───────────────┘
+              │ :9731                   │ :9732
+              ▼                         ▼
+        guardianctl              prometheus   (separate download)
+        CLI remote control       stores metric history
+        status / alerts / logs          │
+                                         ▼
+                                   grafana   (separate download)
+                                   the pretty dashboards
+```
+
+| Part | What it is | Required? | Where it runs |
+|------|-----------|-----------|---------------|
+| **guardiand** | The daemon/engine. Collects metrics, sends alerts, stores data. | **YES** | On the machine you monitor |
+| **guardianctl** | A command-line remote control. It just *talks to* `guardiand` over the REST API (`:9731`). It collects nothing itself. | No — convenience | Usually same machine |
+| **prometheus** | A separate, third-party time-series database. It *pulls* metrics from `guardiand:9732` every few seconds and keeps history. | No — only for dashboards/history | Anywhere |
+| **grafana** | A separate, third-party dashboard UI. It reads from **prometheus** (never from guardiand directly) and draws the graphs. | No — only for dashboards | Anywhere |
+
+**The one thing to remember:** prometheus and grafana are **not part of GuardianD**. GuardianD only *publishes* a metrics page at `:9732/metrics`. Prometheus pulls that page; Grafana reads prometheus. The data flows in one direction:
+
+```
+guardiand ──► prometheus ──► grafana          (dashboards, optional)
+guardiand ──► guardianctl                      (terminal control, optional)
+```
+
+### So what do I actually need?
+
+| You want… | Install |
+|-----------|---------|
+| **Just alerts** (Telegram/Slack/Email) when the box is unhealthy | `guardiand` + one alert channel. **Stop there.** |
+| Alerts **+ a terminal dashboard** (`guardianctl top`, `status`, `alerts`) | add nothing — `guardianctl` ships with it |
+| Alerts **+ web dashboards / long-term graphs** | also install prometheus + grafana ([guide below](#optional-dashboards-prometheus--grafana)) |
+
+Beginners: do the **[Minimal setup](#minimal-setup-5-minutes-any-os)** first. Add prometheus/grafana later only if you miss the graphs.
 
 ---
 
-## Installation
+## Minimal setup (5 minutes, any OS)
 
-### 1. Clone and install
+This gets you `guardiand` running with Telegram alerts. No root, no systemd, no prometheus.
+
+### Step 0 — Prerequisites
+
+- **Python 3.9+** (`python3 --version`)
+- Linux, macOS, or Windows (see [platform notes](#platform-support))
+
+### Step 1 — Get the code and install into a virtual environment
+
+> **Why a venv?** Modern Python (Debian/Ubuntu/Homebrew) refuses `pip install` into the system Python with an `externally-managed-environment` error. A venv sidesteps that and keeps things clean. Do this on every OS.
+
+**Linux / macOS:**
 
 ```bash
 git clone https://github.com/Graaho-Technologies/guardianD.git
 cd guardianD
 
-# Full install (includes numpy + prometheus-client)
-pip install -e ".[full]"
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install -e .          # core (alerts only)
+# pip install -e ".[full]"  # core + intelligence (numpy) + prometheus support
 ```
 
-Verify install:
+**Windows (PowerShell):**
+
+```powershell
+git clone https://github.com/Graaho-Technologies/guardianD.git
+cd guardianD
+
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+pip install -e .
+```
+
+Verify:
 
 ```bash
-guardiand --version
+guardiand --version       # -> GuardianD 0.1.0
 guardianctl --help
 ```
 
-### 2. Generate config
+> The `guardiand` / `guardianctl` commands only exist while the venv is **activated**. Open a new terminal? Re-run `source .venv/bin/activate` (or the Windows equivalent) first.
+
+### Step 2 — Generate a config
 
 ```bash
 guardianctl init --output ~/guardian/guardian.yaml
 ```
 
-This creates a fully-commented config and prints next steps:
+This writes a fully-commented `guardian.yaml` (parent folders are created for you).
 
-```
-Config written to ~/guardian/guardian.yaml
+### Step 3 — Set the basics
 
-Next steps:
-  1. Set instance name:  edit ~/guardian/guardian.yaml  →  instance_name: my-server
-  2. Enable Telegram:    guardianctl setup telegram --config ~/guardian/guardian.yaml
-  3. Validate config:    guardianctl --config ~/guardian/guardian.yaml config validate
-  4. Start daemon:       guardiand --config ~/guardian/guardian.yaml
-  5. Check status:       guardianctl --config ~/guardian/guardian.yaml status
+Open `~/guardian/guardian.yaml` and edit two things.
 
-Note: at least one alert channel must be enabled before the daemon will accept the config.
-```
-
-### 3. Set your instance name
-
-Open `~/guardian/guardian.yaml` and set:
+**1. Name this machine:**
 
 ```yaml
-instance_name: my-server     # appears in every alert and Grafana
-environment: production
+instance_name: my-server        # shows up in every alert
+environment: production          # production | staging | dev
 ```
 
-Also set storage paths (defaults work for root on Linux):
+**2. Storage paths — IMPORTANT if you are not root.** The defaults point at `/var/log/guardian` and `/var/lib/guardian`, which only root can write. Running as a normal user (typical on macOS/Windows/dev), point them at your home folder instead:
 
 ```yaml
 storage:
-  log_dir: /var/log/guardian          # or ~/guardian/logs on macOS
-  db_path: /var/lib/guardian/metrics.db  # or ~/guardian/data/metrics.db on macOS
+  log_dir: ~/guardian/logs
+  db_path: ~/guardian/data/metrics.db
+```
+
+> Non-root note: you will still see harmless `Permission denied: /var/run/guardian` warnings for the PID/heartbeat files. They don't stop the daemon. They disappear when you run as root / via systemd.
+
+### Step 4 — Turn on one alert channel
+
+Telegram is the quickest. Run the wizard:
+
+```bash
+guardianctl --config ~/guardian/guardian.yaml setup telegram
+```
+
+It asks for a bot token (make one with [@BotFather](https://t.me/BotFather)), auto-detects your chat ID, sends a test message, and writes both into your config.
+
+Prefer to edit by hand? See **[Alert channels](#alert-channels)**. At least **one** channel must be enabled or the config won't validate.
+
+### Step 5 — Validate, start, check
+
+```bash
+# Validate (catches typos, missing fields, no-channel-enabled)
+guardianctl --config ~/guardian/guardian.yaml config validate
+
+# Start in the foreground (Ctrl-C to stop) — best for first run
+guardiand --config ~/guardian/guardian.yaml
+
+# …or in the background
+guardiand --config ~/guardian/guardian.yaml >> ~/guardian/logs/daemon.log 2>&1 &
+
+# In another terminal (venv activated), check it
+guardianctl --config ~/guardian/guardian.yaml status
+```
+
+`status` should show `● Running`, all collectors `ok`, and your instance name. **That's a complete, useful install.** Stop here unless you want web dashboards.
+
+> Tip: set `export GUARDIAN_CONFIG=~/guardian/guardian.yaml` once and you can drop the `--config` flag from every command.
+
+---
+
+## Production install (Linux + systemd)
+
+This makes `guardiand` a real system service: starts on boot, restarts on crash, runs as root (so PID/heartbeat files and `dmesg` work). **Linux only** — macOS and Windows use the manual start from Step 5 above.
+
+> **Fast path:** from a cloned repo, `sudo bash scripts/install.sh --full` does steps 1–3 for you — installs from the clone, creates the directories, generates `/etc/guardian/guardian.yaml`, and installs + enables the systemd unit. Edit the config, then `sudo systemctl start guardian`. The manual steps below are the equivalent if you'd rather run them yourself.
+
+### 1. Install the package system-wide
+
+```bash
+git clone https://github.com/Graaho-Technologies/guardianD.git
+cd guardianD
+sudo pip install ".[full]"        # installs guardiand + guardianctl for all users
+which guardiand                   # note this path — you need it next
+```
+
+### 2. Create directories and config
+
+```bash
+sudo mkdir -p /etc/guardian /var/log/guardian /var/lib/guardian
+sudo guardianctl init --output /etc/guardian/guardian.yaml
+sudo nano /etc/guardian/guardian.yaml      # set instance_name + enable a channel
+```
+
+As root, the default `/var/log/guardian` and `/var/lib/guardian` paths work — leave them.
+
+### 3. Install the systemd unit
+
+The shipped `systemd/guardian.service` assumes `guardiand` lives at `/usr/local/bin/guardiand`. Confirm with the `which guardiand` from step 1; if it differs, fix the `ExecStart=` line.
+
+```bash
+sudo cp systemd/guardian.service /etc/systemd/system/
+
+# If `which guardiand` was NOT /usr/local/bin/guardiand, point ExecStart at the real path:
+# sudo sed -i "s#/usr/local/bin/guardiand#$(which guardiand)#" /etc/systemd/system/guardian.service
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now guardian        # enable on boot + start now
+sudo systemctl status guardian
+guardianctl --config /etc/guardian/guardian.yaml status
+```
+
+### Day-2 operations
+
+```bash
+sudo systemctl restart guardian             # restart
+sudo systemctl stop guardian                # stop
+guardianctl config reload                   # hot-reload config (sends SIGHUP, no restart)
+journalctl -u guardian -f                   # follow service logs
 ```
 
 ---
 
-## Alert Channel Setup
+## Platform support
 
-### Telegram (recommended — easiest)
+GuardianD never crashes on a missing feature — unsupported collectors quietly report nothing. What you actually get:
 
-Run the interactive wizard:
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **Linux** | Full | systemd service, `dmesg` kernel events, PSI pressure stalls (kernel 4.20+), OOM-kill detection, EC2 IMDS. |
+| **macOS** | Good for dev/personal | Core CPU/mem/disk/net/process metrics + alerts work. No systemd, no PSI, no `dmesg`. Run manually (Step 5). |
+| **Windows** | Basic, untested | Core psutil metrics + alerts work. No systemd, `dmesg`, PSI, EC2 IMDS, or `systemd_service` health checks. Run `guardiand --config ...` in a terminal, or wrap it as a service with [NSSM](https://nssm.cc/) / Task Scheduler. |
+
+EC2-specific metrics (instance ID, spot-interruption notice, CPU steal) only populate on an actual EC2 instance. Elsewhere the EC2 collector times out once (~2s) and marks `is_ec2: false`.
+
+---
+
+## Alert channels
+
+At least one must be `enabled: true`. Secrets can come from the config file **or** environment variables (env wins).
+
+### Telegram (easiest)
 
 ```bash
-guardianctl setup telegram --config ~/guardian/guardian.yaml
+guardianctl --config ~/guardian/guardian.yaml setup telegram
 ```
 
-The wizard will:
-1. Ask for your bot token (create one at [@BotFather](https://t.me/BotFather))
-2. Auto-detect your chat ID from recent messages
-3. Send a test message to confirm delivery
-4. Write the credentials into your config
-
-Or set manually in `guardian.yaml`:
+…or by hand:
 
 ```yaml
 alerts:
   telegram:
     enabled: true
-    bot_token: "7123456789:AAF..."
-    chat_id: "123456789"
-    min_severity: WARN    # INFO | WARN | CRITICAL | EMERGENCY
+    bot_token: "7123456789:AAF..."   # or env GUARDIAN_TELEGRAM_TOKEN
+    chat_id: "123456789"             # or env GUARDIAN_TELEGRAM_CHAT_ID
+    min_severity: WARN               # INFO | WARN | CRITICAL | EMERGENCY
 ```
 
 ### Slack
 
-1. Create an Incoming Webhook at `api.slack.com/apps`
-2. Add to config:
+Create an Incoming Webhook at `api.slack.com/apps`, then:
 
 ```yaml
 alerts:
   slack:
     enabled: true
-    webhook_url: "https://hooks.slack.com/services/..."
+    webhook_url: "https://hooks.slack.com/services/..."   # or env GUARDIAN_SLACK_WEBHOOK
     channel: "#alerts"
     min_severity: WARN
 ```
 
-Or export: `export GUARDIAN_SLACK_WEBHOOK=https://hooks.slack.com/...`
-
 ### Email (Gmail)
 
-1. Enable 2FA, create App Password at [myaccount.google.com/security](https://myaccount.google.com/security)
-2. Add to config:
+Enable 2FA, create an App Password at [myaccount.google.com/security](https://myaccount.google.com/security), then:
 
 ```yaml
 alerts:
@@ -157,14 +279,14 @@ alerts:
     smtp_host: smtp.gmail.com
     smtp_port: 587
     smtp_user: you@gmail.com
-    smtp_password: "your-app-password"   # or GUARDIAN_EMAIL_PASSWORD env var
+    smtp_password: "your-app-password"   # or env GUARDIAN_EMAIL_PASSWORD
     from_addr: you@gmail.com
     to_addrs:
       - oncall@yourcompany.com
     min_severity: CRITICAL
 ```
 
-### Webhook (PagerDuty / OpsGenie compatible)
+### Webhook (PagerDuty / OpsGenie / custom)
 
 ```yaml
 alerts:
@@ -175,72 +297,46 @@ alerts:
     min_severity: CRITICAL
 ```
 
----
-
-## Validate and Start
+Send a test to confirm delivery:
 
 ```bash
-# Validate config (catches missing fields, wrong thresholds, port conflicts)
-guardianctl --config ~/guardian/guardian.yaml config validate
-
-# Start daemon (foreground, logs to terminal)
-guardiand --config ~/guardian/guardian.yaml
-
-# Or background
-guardiand --config ~/guardian/guardian.yaml >> ~/guardian/logs/daemon.log 2>&1 &
-
-# Check it's running
-guardianctl --config ~/guardian/guardian.yaml status
+guardianctl test-alert --channel telegram --severity WARN
+guardianctl test-alert --channel all --severity CRITICAL
 ```
 
 ---
 
-## Production Install (Linux + systemd)
+## Optional: dashboards (Prometheus + Grafana)
 
-```bash
-sudo bash scripts/install.sh --full
+Skip this entirely unless you want web graphs and metric history. Reminder: these are **two separate programs** you download yourself; GuardianD just feeds them.
+
+### Step 1 — Turn on GuardianD's metrics endpoint
+
+It is **off by default**. Edit your `guardian.yaml`:
+
+```yaml
+prometheus:
+  enabled: true        # ← must flip this to true
+  host: "0.0.0.0"      # or 127.0.0.1 for local-only
+  port: 9732
+  path: /metrics
 ```
 
-The install script:
-- Installs guardianD with full extras via pip
-- Creates `/etc/guardian/`, `/var/log/guardian/`, `/var/lib/guardian/`
-- Copies `systemd/guardian.service`
-- Generates example config at `/etc/guardian/guardian.yaml`
-
-Then:
+Reload (`guardianctl config reload`) or restart, then confirm:
 
 ```bash
-sudo nano /etc/guardian/guardian.yaml
-sudo systemctl start guardian
-sudo systemctl enable guardian
-guardianctl status
+curl http://localhost:9732/metrics | head
 ```
 
-Hot reload config without restart:
+You should see lines like `guardian_cpu_usage_percent{...} 22.0`. If this is empty, prometheus/grafana cannot work — fix it here first.
 
-```bash
-guardianctl config reload   # sends SIGHUP to daemon
-```
-
----
-
-## Grafana Dashboard
-
-GuardianD ships with a complete importable Grafana dashboard (`grafana/dashboard.json`) covering all 67 metrics across 9 sections.
-
-### Quick setup
-
-**Step 1 — Install Prometheus**
+### Step 2 — Install Prometheus and point it at GuardianD
 
 ```bash
 # macOS
 brew install prometheus
-
-# Linux
-# Download from https://prometheus.io/download/
+# Linux: download from https://prometheus.io/download/
 ```
-
-**Step 2 — Configure Prometheus to scrape GuardianD**
 
 Add to `prometheus.yml`:
 
@@ -251,206 +347,96 @@ global:
 scrape_configs:
   - job_name: "guardiand"
     static_configs:
-      - targets: ["localhost:9732"]
+      - targets: ["localhost:9732"]   # GuardianD's metrics port
 ```
 
-Start Prometheus:
+Start it (`brew services start prometheus`, or `prometheus --config.file=...`). Prometheus itself runs on **`:9090`**.
+
+### Step 3 — Install Grafana and add Prometheus as a data source
 
 ```bash
 # macOS
-brew services start prometheus
-
-# Linux
-prometheus --config.file=/etc/prometheus/prometheus.yml
+brew install grafana && brew services start grafana
 ```
 
-**Step 3 — Install and start Grafana**
+Open `http://localhost:3000` (login `admin` / `admin`). Then **Connections → Data sources → Add → Prometheus** and set:
 
-```bash
-# macOS
-brew install grafana
-brew services start grafana
+```
+URL:  http://localhost:9090      ← Prometheus port, NOT 9732
 ```
 
-Grafana runs at `http://localhost:3000` (default login: `admin` / `admin`).
+Click **Save & Test**.
 
-**Step 4 — Add Prometheus datasource**
+### Step 4 — Import the dashboard
 
-In Grafana: **Connections → Data sources → Add new data source → Prometheus**
+**Dashboards → Import → Upload JSON file** → pick `grafana/dashboard.json` (ships in this repo, covers all 67 metrics) → select your Prometheus data source → **Import**. Open it, then pick your host from the **Instance** dropdown.
 
-(Older Grafana: **Configuration → Data Sources → Add data source → Prometheus**)
+Guided walkthrough: `guardianctl setup grafana`.
 
-Set URL: `http://localhost:9090` ← Prometheus server port, NOT `:9732`
+### The ports, untangled
 
-Click **Save & Test** — should show "Successfully queried the Prometheus API."
+| Port | Belongs to | Who connects to it |
+|------|-----------|--------------------|
+| `9731` | GuardianD REST API | `guardianctl` |
+| `9732` | GuardianD `/metrics` | Prometheus scrapes it |
+| `9090` | Prometheus | Grafana reads from it |
+| `3000` | Grafana | your browser |
 
-Or via API:
-
-```bash
-curl -X POST http://admin:admin@localhost:3000/api/datasources \
-  -H "Content-Type: application/json" \
-  -d '{"name":"GuardianD","type":"prometheus","url":"http://localhost:9090","isDefault":true}'
-```
-
-**Step 5 — Import the dashboard**
-
-In Grafana: **Dashboards → Import → Upload JSON file**
-
-Select: `grafana/dashboard.json`
-
-Select your Prometheus datasource → **Import**
-
-Or use the setup wizard for guided instructions:
-
-```bash
-guardianctl setup grafana
-```
-
-**Step 6 — View data**
-
-Open `http://localhost:3000/d/guardiand-ec2-v1`
-
-Select your instance from the **Instance** dropdown at the top.
-
-### Dashboard sections
-
-| Row | Panels |
-|---|---|
-| Quick Overview | CPU%, Load, RAM, Swap, Disk, CPU Steal, PSI pressure stats |
-| Basic | CPU time breakdown, Memory, Network throughput, Disk space |
-| CPU Detail | Steal%, iowait%, context switches, load avg, per-core heatmap |
-| Memory | Dirty pages, FD usage, HugePages, OOM kills, swap rates |
-| Disk I/O | Read/write bytes, IOPS, latency by disk type, utilization |
-| Network | Per-interface throughput, error/drop rates, TCP states, DNS |
-| EC2 | Instance info, spot interruption status, CPU steal trend |
-| App Health | Health check status table + latency |
-| Alerts | Fired/recovered counters, active count, anomaly scores |
+Most "No data" problems are putting `9732` where Grafana expects `9090`.
 
 ---
 
-## Prometheus Metrics Reference
+## guardianctl command reference
 
-Enable in config:
-
-```yaml
-prometheus:
-  enabled: true
-  host: "0.0.0.0"   # or 127.0.0.1 for local-only
-  port: 9732
-  path: /metrics
-```
-
-Metrics are available at `http://localhost:9732/metrics` in Prometheus text format.
-
-Key metrics:
-
-```
-guardian_cpu_usage_percent          # overall CPU %
-guardian_cpu_steal_percent          # EC2 hypervisor steal %
-guardian_cpu_iowait_percent         # I/O wait %
-guardian_memory_usage_ratio         # 0.0–1.0
-guardian_swap_usage_ratio           # 0.0–1.0
-guardian_swap_out_pages_per_second  # active swap pressure
-guardian_disk_usage_ratio           # per mountpoint
-guardian_disk_await_milliseconds    # per disk, by type
-guardian_tcp_connections            # per state (established, close_wait, etc.)
-guardian_dns_latency_milliseconds
-guardian_alerts_fired_total         # counter, by severity + category
-guardian_psi_*_stall_ratio          # PSI pressure (Linux 4.20+ only)
-guardian_ec2_spot_interruption_scheduled  # 1 = termination notice received
-```
-
-All metrics carry labels: `instance_id`, `instance_name`, `environment`.
-
----
-
-## Intelligence Layer
-
-Enabled by default when `numpy` is installed. Runs after a warm-up period (default 2 minutes, configurable).
-
-```yaml
-intelligence:
-  enabled: true
-  baseline_window_hours: 24    # rolling window for baseline
-  baseline_min_samples: 30     # minimum samples before anomaly detection fires
-  warmup_minutes: 5            # suppress intelligence alerts for 5 min after start
-  velocity_enabled: true       # rate-of-change alerts
-  forecast_enabled: true       # linear regression trend forecasting
-```
-
-What it detects:
-
-| Module | What |
-|---|---|
-| **AnomalyDetector** | Z-score spikes vs rolling 24h baseline (fires when z > 2.0 warn / 3.0 critical) |
-| **VelocityDetector** | Sudden % increases in CPU, memory, IOPS, TCP connections |
-| **TrendForecaster** | Linear regression on disk/memory — alerts "Disk full in 3.2h" |
-| **BottleneckFingerprinter** | Correlates patterns: "CPU-bound", "I/O bottleneck", "EC2 noisy neighbor", "Connection leak" |
-
-Intelligence alerts appear in Telegram/Slack the same as threshold alerts, enriched with root cause diagnosis.
-
----
-
-## guardianctl Command Reference
+All commands accept `--config PATH` (or set `GUARDIAN_CONFIG`). They talk to a **running** daemon over the REST API — if the daemon is down you get a clear error, not a crash.
 
 ```bash
-# Status and monitoring
+# Status & live monitoring
 guardianctl status                          # daemon health, collectors, active alerts
 guardianctl metrics                         # all collector snapshots
-guardianctl metrics --collector cpu         # single collector
+guardianctl metrics --collector cpu         # one collector
 guardianctl metrics --watch --interval 5    # live refresh
-guardianctl top                             # htop-style live view with PSI indicators
+guardianctl top                             # htop-style live view
 
 # Alerts
-guardianctl alerts                          # recent alert history
+guardianctl alerts                          # recent history
 guardianctl alerts --active                 # currently firing
 guardianctl alerts --severity CRITICAL --since 2h
 guardianctl test-alert --channel telegram --severity WARN
 
-# Intelligence
+# Intelligence (needs the [full]/[intelligence] extra)
 guardianctl anomalies                       # recent anomaly detections
-guardianctl anomalies --min-score 2.5
-guardianctl baseline --collector memory     # baseline stats per metric
-guardianctl forecast                        # active trend forecasts
+guardianctl baseline --collector memory     # baseline stats
+guardianctl forecast                        # disk/memory fill predictions
 guardianctl diagnose                        # run bottleneck fingerprinter now
 
 # Config
 guardianctl config show                     # print config (secrets redacted)
-guardianctl config validate                 # validate config file
+guardianctl config validate                 # validate the file
 guardianctl config reload                   # hot reload (SIGHUP)
 guardianctl init --output ./guardian.yaml   # generate example config
 
 # Setup wizards
 guardianctl setup telegram                  # interactive Telegram setup
-guardianctl setup grafana                   # Grafana/Prometheus setup guide
+guardianctl setup grafana                   # Grafana/Prometheus guide
 
-# Prometheus
-guardianctl prometheus status               # show if enabled, scrape URL
-guardianctl prometheus url                  # print base URL
+# Prometheus helpers
+guardianctl prometheus status               # enabled? scrape URL?
+guardianctl prometheus url
 
-# Logs
-guardianctl logs                            # recent log entries
+# Logs & health
 guardianctl logs --follow                   # tail -f
 guardianctl logs --lines 50 --level CRITICAL
-
-# App health checks
-guardianctl health                          # all configured health checks
-
-# Daemon lifecycle (Linux systemd)
-guardianctl start
-guardianctl stop
-guardianctl restart
-guardianctl install --systemd              # install as systemd service
-guardianctl uninstall
+guardianctl health                          # app health-check results
 ```
 
-All commands accept `--config PATH` to point at a non-default config file.
+> `guardiand` (the daemon) supports `--version`. `guardianctl` does not — use `guardianctl --help`.
 
 ---
 
-## App Health Checks
+## App health checks
 
-Monitor your own services:
+Have GuardianD watch your own services and alert when one goes down:
 
 ```yaml
 app_health_checks:
@@ -470,80 +456,97 @@ app_health_checks:
     type: process
     target: nginx
 
-  - name: my-worker
+  - name: my-worker          # Linux only
     type: systemd_service
     target: my-worker.service
 ```
 
-Types: `http`, `port`, `process`, `systemd_service`
+Types: `http`, `port`, `process`, `systemd_service` (Linux only).
 
 ---
 
-## Custom Alert Thresholds
+## Custom alert thresholds
 
-All thresholds are configurable in `guardian.yaml`:
+Everything is tunable in `guardian.yaml`:
 
 ```yaml
 thresholds:
-  # CPU
   cpu_warn: 80.0
   cpu_critical: 95.0
   cpu_steal_warn: 5.0          # EC2 only — hypervisor steal
-  cpu_iowait_warn: 40.0
-
-  # Memory
   memory_warn: 80.0
   memory_critical: 92.0
   swap_warn: 50.0
   swap_critical: 80.0
-
-  # Disk
   disk_warn: 85.0
   disk_critical: 95.0
-
-  # Disk I/O latency — per disk type
   disk_await_ssd_warn_ms: 10.0
   disk_await_ebs_warn_ms: 20.0
-  disk_await_hdd_warn_ms: 100.0
-
-  # Network
   network_error_rate_warn: 0.1   # %
-  tcp_close_wait_warn: 100       # connection leak indicator
-
-  # Intelligence
+  tcp_close_wait_warn: 100       # connection-leak indicator
+  # Intelligence (needs numpy)
   anomaly_zscore_warn: 2.0
   anomaly_zscore_critical: 3.0
   forecast_disk_full_warn_hours: 8.0
-  forecast_disk_full_critical_hours: 2.0
 ```
+
+Rule of thumb: every `*_warn` must be **less than** its matching `*_critical`, or validation fails.
+
+---
+
+## Intelligence layer (optional, needs numpy)
+
+Active by default when `numpy` is installed (`pip install -e ".[full]"`). It learns a rolling baseline, then flags statistical anomalies, sudden spikes, and trends ("disk full in 3.2h"). It warms up first (default ~2 min) — `status` shows `intelligence: warming up` until then.
+
+```yaml
+intelligence:
+  enabled: true
+  baseline_window_hours: 24
+  baseline_min_samples: 30
+  warmup_minutes: 5
+  velocity_enabled: true
+  forecast_enabled: true
+```
+
+Anomaly alerts arrive on the same channels as threshold alerts, with a root-cause note attached.
 
 ---
 
 ## Troubleshooting
 
-**Permission denied on `/var/run/guardian`**
-Normal on non-root. Heartbeat and PID file need root. Run with `sudo` in production or accept the warnings in dev.
+**`error: externally-managed-environment` during pip install**
+You're installing into the system Python. Use a venv (Step 1) — that's the fix.
 
-**EC2 collector timeout (2s per cycle)**
-Expected on non-EC2. Default is `ec2_imds_timeout: 2`. Lower to `1` to reduce startup time on non-EC2 hosts. On actual EC2, IMDS responds in <5ms.
+**`guardiand: command not found`**
+The venv isn't activated. Run `source .venv/bin/activate` (Linux/macOS) or `.\.venv\Scripts\Activate.ps1` (Windows) in this terminal.
 
-**PSI metrics show 0 on macOS**
-Expected — PSI requires Linux kernel 4.20+. Panels show 0, not "No data".
+**`Permission denied: /var/run/guardian`**
+Normal when not root. PID/heartbeat files need root. Harmless in dev; gone under systemd/root.
 
-**`intelligence: warming up` in status**
-Wait for `warmup_minutes` (default 2). After warm-up, anomaly/velocity/forecast detectors activate.
+**`config validation failed: At least one alert channel must be enabled`**
+Enable Telegram/Slack/Email/Webhook in `guardian.yaml`. Quickest: `guardianctl setup telegram`.
+
+**`Permission denied` writing logs or the database**
+You set `log_dir`/`db_path` under `/var/...` but aren't root. Point them at `~/guardian/...` (Step 3).
+
+**EC2 collector takes ~2s per cycle on a non-EC2 box**
+Expected — it's waiting on IMDS that isn't there. Lower `collector.ec2_imds_timeout` to `1`.
+
+**PSI / `dmesg` metrics show 0 on macOS/Windows**
+Expected — those are Linux-only. Panels show 0, not an error.
 
 **Grafana shows "No data"**
-1. Check Prometheus is scraping: `curl http://localhost:9090/api/v1/query?query=guardian_cpu_usage_percent`
-2. Check datasource URL is `http://localhost:9090` (Prometheus port), NOT `:9732`
-3. Select your instance from the **Instance** dropdown in the dashboard
+1. Is GuardianD's endpoint on? `curl http://localhost:9732/metrics` (set `prometheus.enabled: true`).
+2. Is Prometheus scraping? `curl 'http://localhost:9090/api/v1/query?query=guardian_cpu_usage_percent'`
+3. Is the Grafana data source URL `http://localhost:9090` (Prometheus), **not** `:9732`?
+4. Pick your host from the **Instance** dropdown.
 
-**Config validation fails**
-At least one alert channel must be enabled. Run `guardianctl setup telegram` to configure one quickly.
+**`scripts/install.sh` fails**
+Known issue — it installs from PyPI, where this package isn't published. Use the [manual production steps](#production-install-linux--systemd) instead.
 
 ---
 
-## Adding a Custom Collector
+## Adding a custom collector
 
 ```python
 # guardian/collector/my_collector.py
@@ -555,33 +558,25 @@ class MyCollector(BaseCollector):
 
     def collect(self) -> MetricSnapshot:
         try:
-            metrics = {"my_metric": 42.0}
             return MetricSnapshot(
                 collector_name=self.name,
                 timestamp=time.time(),
-                metrics=metrics,
+                metrics={"my_metric": 42.0},
             )
         except Exception as exc:
             return self._error_snapshot(str(exc))
 ```
 
-Register in `GuardianDaemon._init_collectors()` in `guardian/main.py`. Add threshold rules in `AlertRouter.evaluate()` in `guardian/alerter/router.py`.
+Register it in `GuardianDaemon._init_collectors()` (`guardian/main.py`), and add threshold rules in `AlertRouter.evaluate()` (`guardian/alerter/router.py`).
 
 ---
 
 ## Development
 
 ```bash
-# Install dev extras
 pip install -e ".[dev]"
-
-# Run tests
 pytest tests/ -v
-
-# Run with coverage
 pytest tests/ --cov=guardian --cov-report=term-missing
-
-# Lint
 ruff check guardian/
 ```
 
@@ -589,4 +584,4 @@ ruff check guardian/
 
 ## License
 
-MIT — see LICENSE file.
+MIT — see [LICENSE](LICENSE).
