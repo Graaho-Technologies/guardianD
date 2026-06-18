@@ -81,6 +81,32 @@ class ThresholdConfig:
     forecast_disk_full_warn_hours: float = 8.0
     forecast_disk_full_critical_hours: float = 2.0
 
+    # Velocity absolute-magnitude floors (per metric path). A rate-of-change spike
+    # must clear BOTH the % threshold AND this raw delta to fire. Without it, a
+    # trivial swing on a tiny idle baseline (e.g. 1.2 -> 16 IOPS) reads as a
+    # +1283% "CRITICAL" spike — pure noise. Units match the metric (CPU/mem are
+    # percentage-points, IOPS is ops/s, TCP is connection count). 0.0 = no floor.
+    velocity_min_abs_delta: Dict[str, float] = field(default_factory=lambda: {
+        "cpu.percent_total": 15.0,                      # +15 percentage-points of CPU
+        "memory.percent_used": 10.0,                    # +10 percentage-points of RAM
+        "memory.swap_sout_per_sec": 50.0,               # +50 pages/s swapped out
+        "disk.total_iops": 500.0,                       # +500 IOPS (EBS gp3 baseline is 3000)
+        "network.tcp_connections.established": 100.0,   # +100 established connections
+    })
+
+    # Anomaly absolute-deviation floors (per metric path). A z-score anomaly must
+    # also deviate from the baseline mean by at least this raw amount to fire.
+    # Stops low-variance idle metrics (e.g. CPU bouncing 3% -> 9%) from reading as
+    # a 3-sigma "CRITICAL" anomaly. Same units as the metric. 0.0 = no floor.
+    anomaly_min_abs_dev: Dict[str, float] = field(default_factory=lambda: {
+        "cpu.percent_total": 15.0,
+        "cpu.times_iowait": 15.0,
+        "cpu.times_steal": 5.0,
+        "memory.percent_used": 10.0,
+        "memory.swap_sout_per_sec": 50.0,
+        "network.dns_latency_ms": 50.0,
+    })
+
 
 @dataclass
 class SlackConfig:

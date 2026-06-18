@@ -239,6 +239,31 @@ thresholds:
   # Disk/memory fill forecast ETA — CRITICAL (hours until predicted full)
   forecast_disk_full_critical_hours: 2.0
 
+  # Velocity absolute-magnitude floors (per metric path).
+  # A rate-of-change spike must clear BOTH velocity_spike_*_pct AND this raw delta
+  # before it alerts. This is the guard against percentage-of-a-tiny-baseline
+  # false positives — e.g. disk IOPS going 1.2 -> 16 is +1283% but only +15 IOPS,
+  # which is noise on an idle box, not an incident. Tune per instance size:
+  # bigger/busier instances warrant higher floors. Units match the metric.
+  velocity_min_abs_delta:
+    cpu.percent_total: 15.0                      # +15 percentage-points of CPU
+    memory.percent_used: 10.0                    # +10 percentage-points of RAM
+    memory.swap_sout_per_sec: 50.0               # +50 pages/s swapped out
+    disk.total_iops: 500.0                       # +500 IOPS (EBS gp3 baseline ~3000)
+    network.tcp_connections.established: 100.0   # +100 established connections
+
+  # Anomaly absolute-deviation floors (per metric path).
+  # A z-score anomaly must also deviate from the baseline mean by at least this
+  # raw amount before it alerts — stops low-variance idle metrics from reading as
+  # 3-sigma anomalies. Units match the metric.
+  anomaly_min_abs_dev:
+    cpu.percent_total: 15.0
+    cpu.times_iowait: 15.0
+    cpu.times_steal: 5.0
+    memory.percent_used: 10.0
+    memory.swap_sout_per_sec: 50.0
+    network.dns_latency_ms: 50.0
+
 # ------------------------------------------------------------
 # Alert routing — dedup, cooldown, escalation, and channels
 # ------------------------------------------------------------

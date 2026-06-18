@@ -98,3 +98,13 @@ def test_anomaly_skips_below_zscore_warn():
     # value = 45.0 → z = 1.5 → below warn (2.0), no alert
     snaps = {"cpu": make_snapshot("cpu", {"percent_total": 45.0})}
     assert det.analyze(snaps) == []
+
+
+def test_anomaly_suppresses_low_magnitude_deviation():
+    # Regression: idle CPU with mean=3, stddev=1. value=9 → z=6 (would be
+    # CRITICAL) but the raw deviation is only +6 points, below the 15-point
+    # absolute floor for cpu.percent_total, so it must NOT alert.
+    stats = {"mean": 3.0, "stddev": 1.0, "sample_count": 50, "is_ready": True}
+    det = _detector(stats=stats)
+    snaps = {"cpu": make_snapshot("cpu", {"percent_total": 9.0})}
+    assert det.analyze(snaps) == []

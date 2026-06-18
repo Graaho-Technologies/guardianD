@@ -329,6 +329,23 @@ thresholds:
   velocity_spike_critical_pct: 70.0
   forecast_disk_full_warn_hours: 8.0
   forecast_disk_full_critical_hours: 2.0
+  # Absolute-magnitude floors: a velocity spike must clear BOTH the % threshold
+  # and this raw delta to fire — guards against %-of-a-tiny-baseline noise
+  # (e.g. 1.2 -> 16 IOPS = +1283% but only +15 IOPS). Units match the metric.
+  velocity_min_abs_delta:
+    cpu.percent_total: 15.0
+    memory.percent_used: 10.0
+    memory.swap_sout_per_sec: 50.0
+    disk.total_iops: 500.0
+    network.tcp_connections.established: 100.0
+  # A z-score anomaly must also deviate from the mean by at least this raw amount.
+  anomaly_min_abs_dev:
+    cpu.percent_total: 15.0
+    cpu.times_iowait: 15.0
+    cpu.times_steal: 5.0
+    memory.percent_used: 10.0
+    memory.swap_sout_per_sec: 50.0
+    network.dns_latency_ms: 50.0
 
 alerts:
   cooldown_seconds: 300

@@ -89,6 +89,13 @@ class AnomalyDetector:
             if z <= 0:
                 continue
 
+            # Absolute-deviation floor: on a low-variance idle metric a few
+            # percentage-points above the mean can read as a 3-sigma anomaly.
+            # Require the raw deviation to clear a per-metric floor first.
+            min_abs_dev = t.anomaly_min_abs_dev.get(metric_path, 0.0)
+            if (value - mean) < min_abs_dev:
+                continue
+
             if self._is_above_threshold(collector, metric_key, value):
                 continue
 

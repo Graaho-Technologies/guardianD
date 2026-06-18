@@ -97,6 +97,15 @@ class VelocityDetector:
                 self._prev_values[metric_path] = current
                 continue
 
+            # Absolute-magnitude floor: a large % swing on a tiny baseline (e.g.
+            # 1.2 -> 16 IOPS = +1283%) is idle-box noise, not an incident. Require
+            # the raw delta to clear a per-metric floor before alerting.
+            abs_delta = current - prev
+            min_abs_delta = t.velocity_min_abs_delta.get(metric_path, 0.0)
+            if abs_delta < min_abs_delta:
+                self._prev_values[metric_path] = current
+                continue
+
             if pct_change >= t.velocity_spike_critical_pct:
                 sev = AlertSeverity.CRITICAL
             elif pct_change >= t.velocity_spike_warn_pct:
@@ -120,6 +129,8 @@ class VelocityDetector:
                     "previous": round(prev, 3),
                     "current": round(current, 3),
                     "pct_change": round(pct_change, 2),
+                    "abs_delta": round(abs_delta, 3),
+                    "min_abs_delta": min_abs_delta,
                 },
                 instance_id=iid,
                 instance_name=self.config.instance_name or iid,

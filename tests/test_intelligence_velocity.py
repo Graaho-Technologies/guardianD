@@ -98,3 +98,30 @@ def test_velocity_skips_when_prev_below_one():
     snaps = {"memory": make_snapshot("memory", {"percent_used": 50.0})}
     alerts = det.analyze(snaps)
     assert alerts == []
+
+
+def test_velocity_suppresses_low_baseline_iops_spike():
+    # Regression: idle-box disk IOPS swinging 1.2 -> 16 is +1233% but only
+    # +14.8 IOPS — below the 500-IOPS absolute floor, so it must NOT alert.
+    det = _detector()
+    det.analyze({"disk": make_snapshot("disk", {"total_iops": 1.2})})
+    alerts = det.analyze({"disk": make_snapshot("disk", {"total_iops": 16.0})})
+    assert alerts == []
+
+
+def test_velocity_fires_on_large_absolute_iops_spike():
+    # A genuine spike: 1000 -> 2000 IOPS is +100% AND +1000 IOPS (>= 500 floor).
+    det = _detector()
+    det.analyze({"disk": make_snapshot("disk", {"total_iops": 1000.0})})
+    alerts = det.analyze({"disk": make_snapshot("disk", {"total_iops": 2000.0})})
+    assert any(a.severity == AlertSeverity.CRITICAL for a in alerts)
+
+
+def test_velocity_suppresses_tiny_tcp_connection_jump():
+    # 1 -> 3 established connections is +200% but only +2 (< 100 floor): noise.
+    det = _detector()
+    det.analyze({"network": make_snapshot(
+        "network", {"tcp_connections": {"established": 1.0}})})
+    alerts = det.analyze({"network": make_snapshot(
+        "network", {"tcp_connections": {"established": 3.0}})})
+    assert alerts == []

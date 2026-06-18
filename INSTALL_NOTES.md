@@ -113,7 +113,31 @@ After the key exposure, moved the AI key out of `guardian.yaml` into `/etc/guard
 ### Setup wizard: `guardianctl setup openai`
 Mirrors `setup telegram`. Prompts for the API key (hidden input), base URL, model, and min-severity; **verifies with a real test chat-completion**; on success writes the `ai:` block and `chmod 600`s the config (and reminds about the env-var option); on 401/other error it reports clearly and writes nothing. Tests in `tests/test_cli.py` (happy path + rejected key). Live-smoke against real OpenAI with a bogus key → clean "Key rejected (401)", config untouched.
 
+### Issue 7 (FIXED) — intelligence layer flooded CRITICALs: velocity/anomaly fired on %-of-a-tiny-baseline (2026-06-18)
+
+**Symptom**
+- A paged `CRITICAL — Rapid Disk IOPS Increase` (6.80 → 30.78, +352.8%). Investigation showed it was one of a *continuous flood*: `guardian.jsonl` had a fresh batch every 10s — Disk IOPS "spiking" 1.2→16 (+1283%), 4.8→29 (+520%); CPU 2.4%→5.4%; TCP established 1→3 (+200%) — each fired CRITICAL then immediately recovered next interval. All trivial idle-box noise on a 16-vCPU / 30 GB / NVMe(EBS) instance doing essentially nothing (load ~0.7, IOPS in the single/low-double digits).
+
+**Root cause**
+- `guardian/intelligence/velocity.py`: alerted purely on `pct_change = (cur-prev)/prev*100` vs `velocity_spike_*_pct` (40/70), with the only guard being `prev < 1.0`. Percentage-of-a-tiny-baseline is mathematically guaranteed to explode — 1.2→16 IOPS is a *real* +1283% but only +15 IOPS, which is nothing. A 10s sampling window on an idle disk is inherently bursty (one log flush ⇒ a "spike"), so consecutive-interval % comparison floods by design.
+- Same latent bug in `guardian/intelligence/anomaly.py`: a z-score on a low-variance idle metric (CPU bouncing 3%→9%) yields z≈6 ⇒ a "CRITICAL anomaly" for a 6-point blip, with no absolute-magnitude guard.
+
+**Fix — absolute-magnitude floors (a spike must clear BOTH the % threshold AND a raw-delta floor)**
+- `config/schema.py`: two new per-metric-path `Dict[str,float]` threshold fields with server-tuned defaults — `velocity_min_abs_delta` (IOPS 500, CPU 15 pts, mem 10 pts, swap-out 50 pg/s, TCP est 100) and `anomaly_min_abs_dev` (CPU/iowait 15, steal 5, mem 10, swap-out 50, DNS 50 ms). `0.0` = no floor (back-compat for unlisted metrics).
+- `velocity.py`: after the positive-change check, skip when `(current-prev) < velocity_min_abs_delta[path]`; also surface `abs_delta`/`min_abs_delta` in the alert metrics for debuggability.
+- `anomaly.py`: after `z>0`, skip when `(value-mean) < anomaly_min_abs_dev[path]`.
+- `loader.py` (embedded template) + `config/guardian.example.yaml`: documented both blocks. Loader needed no logic change — `_merge` carries dict threshold fields through; `validate_config`'s warn<crit pairs are untouched.
+- Tests: `tests/test_intelligence_velocity.py` (+3 — idle IOPS 1.2→16 and TCP 1→3 suppressed; genuine 1000→2000 IOPS still CRITICAL) and `tests/test_intelligence_anomaly.py` (+1 — mean 3/σ 1, value 9 ⇒ z=6 suppressed by the 15-pt floor). Existing anomaly tests unaffected (their deviations are ≥25, above the floor).
+
+**Verified**
+- Intelligence + config suites green (`28 passed`); full suite adds no new failures (the only 12, `tests/test_storage_log_writer.py`, pre-exist on clean `main` — see note above).
+- Deployed to the live daemon: `sudo pip install --no-deps --force-reinstall .` (the service runs from the *installed* copy, not the repo), added the floor blocks to `/etc/guardian/guardian.yaml` (backup saved; `load_config` re-validated OK), `systemctl restart guardian` → active, NRestarts=0.
+- **Live proof:** after the 5-min intelligence warmup, a 6-min observation window with real IOPS churn (reads 72,980→98,908, writes 13,111→29,457) produced **zero** velocity/anomaly alerts — down from one CRITICAL every 10s. Genuine threshold/forecast alerting paths unchanged.
+
+**Operator note (separate, real):** root `/` is at **80%** (116G/146G). That is *not* noise — the disk-fill forecast may legitimately warn as it climbs; worth a cleanup pass.
+
 ## Repo changes made (commit candidates)
 - `setup.cfg` — now the complete authoritative metadata (Issue 1).
 - `pyproject.toml` — removed split-brain `[project]` table (Issue 1).
 - `systemd/guardian.service` — moved StartLimit keys to `[Unit]` (Issue 3).
+- `guardian/config/schema.py`, `guardian/intelligence/velocity.py`, `guardian/intelligence/anomaly.py`, `guardian/config/loader.py`, `config/guardian.example.yaml` + velocity/anomaly tests — absolute-magnitude floors to stop the intelligence false-positive storm (Issue 7).
