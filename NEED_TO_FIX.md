@@ -1,12 +1,20 @@
 # NEED_TO_FIX — GuardianD false-positive & correctness audit
 
-> **STATUS (2026-06-18): ALL 10 FIXES IMPLEMENTED ✅** — FIX-1…FIX-10 done, each with
-> regression tests. Full suite: **279 passed**, only the **12 pre-existing
-> `test_storage_log_writer.py` FileNotFound failures** remain (confirmed failing on a clean
-> stashed tree — unrelated to this work). New config knobs added to schema + loader + both
-> templates and verified to load/validate. Still TODO: deploy to the running daemon
-> (`sudo pip install --no-deps --force-reinstall .` → update `/etc/guardian/guardian.yaml` →
-> `systemctl restart guardian`) and verify post-warmup, then commit/push per the grouping below.
+> **STATUS (2026-06-18): ALL 10 FIXES IMPLEMENTED, COMMITTED, PUSHED & DEPLOYED ✅**
+> FIX-1…FIX-10 done, each with regression tests. Full suite: **279 passed**; only the **12
+> pre-existing `test_storage_log_writer.py` FileNotFound failures** remain (confirmed failing on
+> a clean stashed tree — unrelated). Committed as `8700a3c` and pushed to `origin/main`.
+> Deployed: reinstalled the package (`pip install --no-deps --force-reinstall .`), updated the
+> live `/etc/guardian/guardian.yaml` `dns_check_host` IP→`amazonaws.com` (backup saved), and
+> restarted `guardian` — daemon active, zero collector errors. Live-verified: `nvme0n1`
+> now classifies as **ebs** (FIX-2); DNS check resolves a hostname with real latency
+> (FIX-9, `dns_healthy=true`). The other knobs run on their new code defaults
+> (breach/recovery=2, disk_await_min_ops=50, network_min_pps=100, disk_sleep 5/20,
+> forecast 30/0.9). Forecast/intelligence behavior fully settles after the ~5-min warmup.
+>
+> Minor known nuance (not a regression): NVMe *partitions* (`nvme0n1p1/p14/p15`) still report
+> `nvme` because they have no sysfs `device/model`; the whole disk `nvme0n1` (where real I/O is
+> attributed) is correctly `ebs`, and FIX-4's min-ops floor covers idle-partition latency noise.
 
 > Audit date: **2026-06-18**. Scope: every collector, the alert router's threshold
 > evaluation, and the three intelligence detectors (velocity/anomaly/forecast).
