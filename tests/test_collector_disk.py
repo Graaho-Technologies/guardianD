@@ -58,3 +58,21 @@ def test_disk_skips_pseudo_fs(mocker):
     snap = collector.collect()
 
     assert all(m["fstype"] != "tmpfs" for m in snap.metrics["mounts"])
+
+
+def test_detect_disk_type_ebs_nvme(mocker):
+    # EC2 root: nvme device whose model reads "Amazon Elastic Block Store"
+    from guardian.collector import disk as disk_mod
+    mocker.patch.object(disk_mod, "_read_block_model", return_value="Amazon Elastic Block Store")
+    assert disk_mod._detect_disk_type("nvme0n1") == "ebs"
+
+
+def test_detect_disk_type_instance_store_nvme(mocker):
+    from guardian.collector import disk as disk_mod
+    mocker.patch.object(disk_mod, "_read_block_model", return_value="Amazon EC2 NVMe Instance Storage")
+    assert disk_mod._detect_disk_type("nvme1n1") == "nvme"
+
+
+def test_detect_disk_type_xvd_is_ebs():
+    from guardian.collector import disk as disk_mod
+    assert disk_mod._detect_disk_type("xvda") == "ebs"

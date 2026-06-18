@@ -67,6 +67,12 @@ class AlertRouter:
         self._ai = AIEnricher(config.ai)
         # fingerprint → (alert, first_seen_ts, last_sent_ts)
         self._active: Dict[str, Tuple[Alert, float, float]] = {}
+        # fingerprint → consecutive cycles a debounced breach has been true but
+        # not yet fired (breach debounce). Cleared once it stops breaching.
+        self._breach_streak: Dict[str, int] = {}
+        # fingerprint → consecutive cycles an active alert has been resolved
+        # (recovery hysteresis). Reset if it re-breaches before clearing.
+        self._clear_streak: Dict[str, int] = {}
 
     def _instance_id(self, snapshots: Dict[str, MetricSnapshot]) -> str:
         ec2 = snapshots.get("ec2")
@@ -200,6 +206,11 @@ class AlertRouter:
 
             for disk_name, io in disk.metrics.get("io", {}).items():
                 await_ms = io.get("await_ms", 0.0)
+                # await is total_time/total_ops — meaningless on a near-idle disk
+                # where one slow I/O dominates a tiny denominator. Require enough
+                # ops in the interval before treating latency as alertable.
+                if io.get("total_ops", 0.0) < t.disk_await_min_ops:
+                    continue
                 disk_type = io.get("disk_type", "unknown")
                 warn_attr, crit_attr = _DISK_AWAIT_ATTRS.get(disk_type, _DISK_AWAIT_ATTRS["unknown"])
                 warn_val = getattr(t, warn_attr, 10.0)
@@ -239,6 +250,14 @@ class AlertRouter:
             for iface, stats in net.metrics.get("interfaces", {}).items():
                 err_rate = stats.get("error_rate_percent", 0.0)
                 drop_rate = stats.get("drop_rate_percent", 0.0)
+
+                # error_rate/drop_rate are a ratio of a tiny packet count on an
+                # idle interface — one stray error becomes a huge %. Require
+                # meaningful traffic before treating the rate as alertable.
+                total_pps = (stats.get("packets_sent_per_sec", 0.0)
+                             + stats.get("packets_recv_per_sec", 0.0))
+                if total_pps < t.network_min_pps:
+                    continue
 
                 if err_rate >= t.network_error_rate_critical:
                     _a(AlertSeverity.CRITICAL, "network",
@@ -280,9 +299,16 @@ class AlertRouter:
                 _a(AlertSeverity.WARN, "process", "Zombie Processes Detected",
                    f"{zombies} zombie processes", {"zombie_count": zombies})
 
-            if dsleep_count > 0:
+            # Note: keep the title stable (count goes in the message/metrics) so
+            # the fingerprint doesn't change every cycle and defeat dedup/debounce.
+            if dsleep_count >= t.disk_sleep_critical:
+                _a(AlertSeverity.CRITICAL, "process",
+                   "Processes Stuck in Disk-Sleep (D state)",
+                   f"{dsleep_count} process(es) in uninterruptible sleep (D state)",
+                   {"disk_sleep_count": dsleep_count})
+            elif dsleep_count >= t.disk_sleep_warn:
                 _a(AlertSeverity.WARN, "process",
-                   f"Processes in Disk-Sleep (D state): {dsleep_count}",
+                   "Processes in Disk-Sleep (D state)",
                    f"{dsleep_count} process(es) in uninterruptible sleep (D state)",
                    {"disk_sleep_count": dsleep_count})
 
@@ -382,10 +408,16 @@ class AlertRouter:
                     name = chk.get("name", "unknown")
                     err = chk.get("error", "")
                     critical = True
+                    failure_threshold = 2
                     for cfg_chk in self.config.app_health_checks:
                         if cfg_chk.name == name:
                             critical = cfg_chk.critical_on_failure
+                            failure_threshold = cfg_chk.failure_threshold
                             break
+                    # Suppress single transient failures (deploy/restart/GC pause);
+                    # only alert once the check has failed N consecutive probes.
+                    if chk.get("consecutive_failures", 1) < failure_threshold:
+                        continue
                     sev = AlertSeverity.CRITICAL if critical else AlertSeverity.WARN
                     title = f"Health Check Failed: {name}"
                     fp = _fingerprint("app_health", title)
@@ -408,10 +440,23 @@ class AlertRouter:
         if not self.config.alerts.recovery_notifications:
             return []
         current_fps = {a.fingerprint for a in self.evaluate(snapshots)}
+        clear_cycles = max(1, self.config.alerts.recovery_clear_cycles)
         recoveries: List[Alert] = []
         now = time.time()
-        resolved = [fp for fp in list(self._active) if fp not in current_fps]
-        for fp in resolved:
+        for fp in list(self._active):
+            if fp in current_fps:
+                # Still breaching — abandon any in-progress clear streak so a
+                # single dip doesn't recover a still-active condition.
+                self._clear_streak.pop(fp, None)
+                continue
+            # Resolved this cycle. Require it to stay clear for N cycles
+            # (hysteresis) before emitting a recovery, so a metric oscillating
+            # across the threshold doesn't produce a fire/recover storm.
+            streak = self._clear_streak.get(fp, 0) + 1
+            self._clear_streak[fp] = streak
+            if streak < clear_cycles:
+                continue
+            self._clear_streak.pop(fp, None)
             orig, first_seen, _ = self._active.pop(fp)
             recoveries.append(Alert(
                 id=str(uuid.uuid4()),
@@ -433,12 +478,35 @@ class AlertRouter:
         now = time.time()
         cooldown = self.config.alerts.cooldown_seconds
         escalation_secs = self.config.alerts.escalation_minutes * 60
+        breach_cycles = max(1, self.config.alerts.breach_cycles_to_alert)
         to_send: List[Alert] = []
+
+        # Breach debounce applies only to standard threshold alerts. Intelligence
+        # alerts (velocity/anomaly/forecast) are inherently single-cycle events,
+        # and EMERGENCY alerts (OOM kill, spot termination) must fire instantly —
+        # both bypass the debounce.
+        def _debounced(a: Alert) -> bool:
+            return (not a.is_recovery
+                    and a.category != "intelligence"
+                    and a.severity != AlertSeverity.EMERGENCY)
+
+        # Reset streaks for fingerprints that stopped breaching this cycle.
+        current_breach_fps = {a.fingerprint for a in alerts if _debounced(a)}
+        for fp in list(self._breach_streak):
+            if fp not in current_breach_fps:
+                del self._breach_streak[fp]
 
         for alert in alerts:
             if alert.is_recovery:
                 to_send.append(alert)
                 continue
+            if _debounced(alert):
+                streak = self._breach_streak.get(alert.fingerprint, 0) + 1
+                self._breach_streak[alert.fingerprint] = streak
+                # Hold a not-yet-sustained breach unless it's already active
+                # (already fired — let cooldown/escalation handle re-sends).
+                if streak < breach_cycles and alert.fingerprint not in self._active:
+                    continue
             fp = alert.fingerprint
             if fp in self._active:
                 orig_alert, first_seen, last_sent = self._active[fp]

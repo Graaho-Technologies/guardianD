@@ -19,7 +19,8 @@ def _mock_baseline(warming_up=False, values=None):
     return b
 
 
-def _forecaster(warming_up=False, values=None, warn_hours=8.0, crit_hours=2.0, interval=10):
+def _forecaster(warming_up=False, values=None, warn_hours=8.0, crit_hours=2.0,
+                interval=10, min_samples=10, min_r2=0.9):
     cfg = GuardianConfig()
     cfg.thresholds.forecast_disk_full_warn_hours = warn_hours
     cfg.thresholds.forecast_disk_full_critical_hours = crit_hours
@@ -27,6 +28,8 @@ def _forecaster(warming_up=False, values=None, warn_hours=8.0, crit_hours=2.0, i
     cfg.thresholds.swap_critical = 80.0
     cfg.thresholds.disk_critical = 95.0
     cfg.collector.interval_seconds = interval
+    cfg.intelligence.forecast_min_samples = min_samples
+    cfg.intelligence.forecast_min_r2 = min_r2
     baseline = _mock_baseline(warming_up, values)
     return TrendForecaster(cfg, baseline)
 
@@ -118,3 +121,34 @@ def test_forecast_alert_has_forecast_eta():
     if alerts:
         assert alerts[0].forecast_eta_minutes > 0
         assert hasattr(alerts[0], "forecast_eta_minutes")
+
+
+# --- FIX-8: longer-history + R² gate ----------------------------------------
+
+def test_forecast_requires_min_samples():
+    # 20 clean ramp samples but min_samples=30 → not enough history → no alert.
+    values = [80.0 + i * 0.5 for i in range(20)]
+    fc = _forecaster(values=values, interval=60, min_samples=30)
+    snaps = {"memory": make_snapshot("memory", {"percent_used": 89.5, "swap_percent": 10.0})}
+    assert fc.analyze(snaps) == []
+
+
+def test_forecast_rejects_noisy_series():
+    # Noisy, near-flat series with a tiny upward drift but no real trend.
+    # Slope may be slightly positive, but R² is far below 0.9 → no forecast.
+    import random
+    random.seed(1)
+    values = [70.0 + random.uniform(-5, 5) for _ in range(40)]
+    fc = _forecaster(values=values, interval=60, min_samples=30, min_r2=0.9)
+    snaps = {"memory": make_snapshot("memory", {"percent_used": values[-1], "swap_percent": 10.0})}
+    assert fc.analyze(snaps) == []
+
+
+def test_forecast_accepts_clean_long_ramp():
+    # 40-sample clean ramp (R² ≈ 1.0) clears both the sample and R² gates.
+    values = [70.0 + i * 0.5 for i in range(40)]  # slope 0.5%/min @ 60s
+    fc = _forecaster(values=values, warn_hours=8.0, crit_hours=2.0,
+                     interval=60, min_samples=30, min_r2=0.9)
+    snaps = {"memory": make_snapshot("memory", {"percent_used": values[-1], "swap_percent": 10.0})}
+    alerts = fc.analyze(snaps)
+    assert any(a.category == "intelligence" for a in alerts)

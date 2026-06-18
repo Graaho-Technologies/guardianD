@@ -18,9 +18,28 @@ _SKIP_FSTYPES = {
 }
 
 
+def _read_block_model(disk_name: str) -> str:
+    """Best-effort read of /sys/block/<dev>/device/model. '' if unavailable."""
+    try:
+        with open(f"/sys/block/{disk_name}/device/model", "r") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
 def _detect_disk_type(disk_name: str) -> str:
-    """Detect disk type: nvme | ebs | hdd | ssd | unknown."""
+    """Detect disk type: nvme | ebs | hdd | ssd | unknown.
+
+    On EC2 the root device is frequently an NVMe-attached EBS volume named
+    ``nvme0n1`` whose sysfs model reads "Amazon Elastic Block Store". Such
+    volumes are network-attached and legitimately slower than local NVMe
+    instance storage, so they must use the (looser) EBS latency thresholds,
+    not the strict instance-store NVMe ones. Distinguish by reading the model.
+    """
     if disk_name.startswith("nvme"):
+        model = _read_block_model(disk_name).lower()
+        if "elastic block store" in model or model.startswith("amazon ec2 ebs"):
+            return "ebs"
         return "nvme"
     if disk_name.startswith("xvd"):
         return "ebs"
@@ -113,6 +132,7 @@ class DiskCollector(BaseCollector):
                             "read_ops_per_sec": read_count_delta / elapsed,
                             "write_ops_per_sec": write_count_delta / elapsed,
                             "total_iops": total_ops / elapsed,
+                            "total_ops": total_ops,  # raw op count this interval (latency-floor gate)
                             "read_latency_ms": read_latency,
                             "write_latency_ms": write_latency,
                             "await_ms": await_ms,

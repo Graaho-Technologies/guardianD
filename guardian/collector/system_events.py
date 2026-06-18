@@ -16,7 +16,10 @@ _OOM_RE = re.compile(r"Kill(?:ed)? process (\d+) \(([^)]+)\).*?(\d+) kB", re.DOT
 _LEVEL_MAP = {
     "0": "emerg", "1": "alert", "2": "crit",
     "3": "err", "4": "warn", "5": "notice",
+    "6": "info", "7": "debug",
 }
+# Levels we retain from dmesg (mirrors the old --level=warn,err,crit,alert,emerg).
+_ALERT_LEVELS = {"warn", "err", "crit", "alert", "emerg"}
 
 
 def _run(cmd: List[str], timeout: int = 10) -> str:
@@ -86,36 +89,42 @@ class SystemEventsCollector(BaseCollector):
     def collect(self) -> MetricSnapshot:
         ts = time.time()
         try:
-            dmesg_out = _run(
-                ["dmesg", "--level=warn,err,crit,alert,emerg", "--time-format=iso", "--nopager"],
-                timeout=5,
-            )
+            # Use --raw so each line keeps its real syslog priority prefix
+            # (<PRI>[boot_seconds] message). --time-format=iso strips the <N>
+            # prefix, which made every line default to "warn" and left the
+            # "Kernel Critical Event" alert permanently dead (FIX-10). We parse
+            # the level ourselves and keep only warn-and-above lines.
+            boot_time = psutil.boot_time()
+            dmesg_out = _run(["dmesg", "--raw", "--nopager"], timeout=5)
             all_dmesg: List[Dict] = []
             oom_kills_new: List[Dict] = []
             new_oom_count = 0
 
             for line in dmesg_out.splitlines():
                 try:
-                    msg_ts = 0.0
                     message = line
-                    bracket_match = re.match(r"\[([^\]]+)\]\s*(.*)", line)
-                    if bracket_match:
-                        ts_str = bracket_match.group(1)
-                        message = bracket_match.group(2)
-                        try:
-                            from datetime import datetime
-                            msg_ts = datetime.fromisoformat(
-                                ts_str.replace(",", ".")
-                            ).timestamp()
-                        except Exception:
-                            msg_ts = 0.0
+                    # <PRI> prefix: syslog level = PRI & 7 (facility in high bits).
+                    level: Optional[str] = None
+                    pri_match = re.match(r"<(\d+)>", message)
+                    if pri_match:
+                        pri = int(pri_match.group(1))
+                        level = _LEVEL_MAP.get(str(pri & 0x07))
+                        message = message[pri_match.end():]
 
-                    # Infer level from message prefix <N>
-                    level = "warn"
-                    level_match = re.match(r"<(\d+)>", message)
-                    if level_match:
-                        level = _LEVEL_MAP.get(level_match.group(1), "err")
-                        message = message[level_match.end():].strip()
+                    # Keep only warn-and-above (matches the old --level filter).
+                    if level not in _ALERT_LEVELS:
+                        continue
+
+                    # Boot-relative timestamp: [   123.456789]
+                    msg_ts = 0.0
+                    bracket_match = re.match(r"\s*\[\s*([0-9.]+)\]\s*(.*)", message)
+                    if bracket_match:
+                        try:
+                            msg_ts = boot_time + float(bracket_match.group(1))
+                        except ValueError:
+                            msg_ts = 0.0
+                        message = bracket_match.group(2)
+                    message = message.strip()
 
                     entry = {"timestamp": msg_ts, "level": level, "message": message[:300]}
                     all_dmesg.append(entry)
@@ -200,7 +209,6 @@ class SystemEventsCollector(BaseCollector):
                 psi = _empty_psi()
 
             kernel_version = _run(["uname", "-r"]).strip()
-            boot_time = psutil.boot_time()
             uptime_seconds = time.time() - boot_time
 
             metrics = {

@@ -65,7 +65,7 @@ def load_config(path: str) -> GuardianConfig:
         intel_raw = raw["intelligence"]
         for key in ("enabled", "baseline_window_hours", "baseline_min_samples",
                     "warmup_minutes", "velocity_enabled", "forecast_enabled",
-                    "fingerprint_enabled"):
+                    "fingerprint_enabled", "forecast_min_samples", "forecast_min_r2"):
             if key in intel_raw:
                 setattr(config.intelligence, key, intel_raw[key])
         if "anomaly_collectors" in intel_raw:
@@ -76,7 +76,8 @@ def load_config(path: str) -> GuardianConfig:
     if "alerts" in raw:
         alerts_raw = raw["alerts"]
         for key in ("cooldown_seconds", "escalation_minutes", "recovery_notifications",
-                    "group_alerts", "max_alerts_per_dispatch"):
+                    "group_alerts", "max_alerts_per_dispatch",
+                    "breach_cycles_to_alert", "recovery_clear_cycles"):
             if key in alerts_raw:
                 setattr(config.alerts, key, alerts_raw[key])
         if "slack" in alerts_raw:
@@ -197,6 +198,7 @@ def validate_config(config: GuardianConfig) -> List[str]:
         ("network_error_rate_warn", "network_error_rate_critical"),
         ("network_drop_rate_warn", "network_drop_rate_critical"),
         ("tcp_close_wait_warn", "tcp_close_wait_critical"),
+        ("disk_sleep_warn", "disk_sleep_critical"),
         ("psi_cpu_some_warn", "psi_cpu_some_critical"),
         ("psi_memory_some_warn", "psi_memory_some_critical"),
         ("psi_memory_full_warn", "psi_memory_full_critical"),
@@ -260,8 +262,8 @@ collector:
   process_top_n: 10
   ec2_imds_timeout: 2
   spot_interruption_check: true
-  dns_check_host: "169.254.169.253"   # AWS VPC resolver
-  dns_check_fallback: "8.8.8.8"
+  dns_check_host: "amazonaws.com"     # MUST be a hostname (an IP literal does no DNS query)
+  dns_check_fallback: "1.1.1.1"
   disk_type_detection: true
 
 thresholds:
@@ -299,11 +301,17 @@ thresholds:
   disk_await_ebs_critical_ms: 100.0
   disk_await_nvme_warn_ms: 10.0
   disk_await_nvme_critical_ms: 50.0
+  # Min raw ops in an interval before disk latency (await) is evaluated — guards
+  # against one slow I/O dominating a tiny denominator on an idle disk.
+  disk_await_min_ops: 50.0
   # Network
   network_error_rate_warn: 0.1
   network_error_rate_critical: 1.0
   network_drop_rate_warn: 0.05
   network_drop_rate_critical: 0.5
+  # Min packets/sec on an iface before its error/drop rate is evaluated — guards
+  # against one stray error becoming a huge % on a near-idle interface.
+  network_min_pps: 100.0
   tcp_close_wait_warn: 100
   tcp_close_wait_critical: 500
   tcp_time_wait_warn: 1000
@@ -311,6 +319,10 @@ thresholds:
   # Process
   zombie_warn: 5
   zombie_critical: 20
+  # Processes stuck in uninterruptible disk-sleep (D state) — alert on a count,
+  # not on > 0 (brief D state during blocking I/O is normal).
+  disk_sleep_warn: 5
+  disk_sleep_critical: 20
   # PSI — Linux 4.20+
   psi_cpu_some_warn: 30.0
   psi_cpu_some_critical: 70.0
@@ -353,6 +365,14 @@ alerts:
   recovery_notifications: true
   group_alerts: true
   max_alerts_per_dispatch: 10
+  # Flap suppression. A threshold breach must persist this many consecutive
+  # cycles before firing (debounce); a fired alert is only recovered after the
+  # condition stays resolved this many cycles (hysteresis). Stops a metric
+  # oscillating across a threshold from flooding fire/recover pairs. Set both to
+  # 1 for immediate fire/recover. Velocity/anomaly/forecast and EMERGENCY alerts
+  # (OOM, spot termination) bypass the debounce and always fire instantly.
+  breach_cycles_to_alert: 2
+  recovery_clear_cycles: 2
 
   slack:
     enabled: false
@@ -417,6 +437,11 @@ intelligence:
   forecast_enabled: true
   forecast_collectors: [disk, memory]
   fingerprint_enabled: true
+  # Require this many samples before fitting a disk/memory-full trend, and only
+  # project when the linear fit's R² clears this (a slope through noise is not a
+  # trend). Guards against short-window extrapolation inventing "will fill" alerts.
+  forecast_min_samples: 30
+  forecast_min_r2: 0.9
 
 prometheus:
   enabled: false
@@ -435,6 +460,7 @@ app_health_checks: []
 #     timeout_seconds: 5
 #     expected_status_code: 200
 #     critical_on_failure: true
+#     failure_threshold: 2          # consecutive failed probes before alerting
 #     headers: {}
 
 storage:

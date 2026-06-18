@@ -103,7 +103,7 @@ def test_dmesg_dedup_first_collection_seeds_no_new_errors(mocker):
     On the first collection the seen-set is seeded, so no entries should
     appear in dmesg_errors_new even when dmesg output is non-empty.
     """
-    dmesg_line = "[2024-01-15T10:00:00,000000+0000] <3>some kernel error occurred"
+    dmesg_line = "<3>[   10.123456] some kernel error occurred"
     _mock_run(mocker, dmesg_out=dmesg_line)
 
     collector = SystemEventsCollector()
@@ -119,7 +119,7 @@ def test_dmesg_dedup_second_collection_no_repeat(mocker):
     If the same dmesg line appears in both the first and second collection,
     it must NOT be reported in the second collection.
     """
-    dmesg_line = "[2024-01-15T10:00:00,000000+0000] <3>some kernel error occurred"
+    dmesg_line = "<3>[   10.123456] some kernel error occurred"
     _mock_run(mocker, dmesg_out=dmesg_line)
 
     collector = SystemEventsCollector()
@@ -134,8 +134,8 @@ def test_dmesg_new_entry_reported_on_second_collection(mocker):
     A line that did NOT appear in the first collection SHOULD be reported
     as a new error in the second collection.
     """
-    old_line = "[2024-01-15T10:00:00,000000+0000] <3>old error"
-    new_line = "[2024-01-15T10:05:00,000000+0000] <3>brand new error that didnt exist before"
+    old_line = "<3>[   10.123456] old error"
+    new_line = "<2>[   20.654321] brand new critical error that didnt exist before"
 
     call_count = {"n": 0}
     import subprocess as _subprocess
@@ -160,6 +160,40 @@ def test_dmesg_new_entry_reported_on_second_collection(mocker):
 
     assert snap2.metrics["dmesg_error_count_new"] == 1
     assert snap2.metrics["dmesg_errors_new"][0]["message"] != ""
+
+
+def test_dmesg_raw_priority_parsed_to_level(mocker):
+    """FIX-10: a <2> crit line must be classified 'crit', a <6> info line dropped."""
+    crit_line = "<2>[   42.000000] critical kernel failure"
+    info_line = "<6>[   43.000000] just informational"
+
+    call_count = {"n": 0}
+    import subprocess as _subprocess
+
+    def _fake_run(cmd, **kwargs):
+        result = _subprocess.CompletedProcess(cmd, 0)
+        result.stdout = ""
+        result.stderr = ""
+        call_count["n"] += 1
+        if cmd[0] == "dmesg":
+            # seed empty first, then emit both lines on the second collection
+            result.stdout = "" if call_count["n"] <= 1 else f"{crit_line}\n{info_line}"
+        elif cmd[0] == "uname":
+            result.stdout = "5.15.0"
+        return result
+
+    mocker.patch("guardian.collector.system_events.subprocess.run", side_effect=_fake_run)
+
+    collector = SystemEventsCollector()
+    collector.collect()         # seed
+    snap2 = collector.collect()
+
+    new = snap2.metrics["dmesg_errors_new"]
+    crit = [e for e in new if e["level"] == "crit"]
+    assert len(crit) == 1
+    assert crit[0]["message"] == "critical kernel failure"
+    # info (<6>) is below warn → dropped entirely
+    assert all(e["level"] != "info" for e in new)
 
 
 # ─── Systemd failed units ──────────────────────────────────────────────────────

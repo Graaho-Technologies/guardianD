@@ -30,11 +30,14 @@ collector:
   # Sends EMERGENCY alert with ~2-minute warning before forced stop
   spot_interruption_check: true
 
-  # Primary DNS host for latency check (AWS VPC resolver — fastest on EC2)
-  dns_check_host: "169.254.169.253"
+  # Hostname resolved to test DNS health/latency. MUST be a hostname, not an IP
+  # literal — resolving an IP performs no DNS query, so the check would always
+  # pass and never detect a real DNS outage. The system resolver is used (the
+  # AWS VPC resolver on EC2), so this still exercises that resolver.
+  dns_check_host: "amazonaws.com"
 
   # Fallback DNS host used if primary is unreachable
-  dns_check_fallback: "8.8.8.8"
+  dns_check_fallback: "1.1.1.1"
 
   # Auto-detect disk type (nvme/ebs/hdd/ssd) from /sys/block rotational flag
   # Used to apply type-aware I/O latency thresholds below
@@ -147,6 +150,11 @@ thresholds:
   # NVMe instance store — CRITICAL
   disk_await_nvme_critical_ms: 50.0
 
+  # Minimum raw I/O ops in a collection interval before disk latency (await) is
+  # evaluated. await = total_time / total_ops, so on an idle disk one slow I/O
+  # (a single 60ms EBS fsync) dominates and reads as a CRITICAL latency spike.
+  disk_await_min_ops: 50.0
+
   # --- Network ---
 
   # % network error rate (errors / total packets) — WARN
@@ -160,6 +168,11 @@ thresholds:
 
   # % packet drop rate — CRITICAL
   network_drop_rate_critical: 0.5
+
+  # Minimum packets/sec (sent+recv) on an interface before its error/drop rate
+  # is evaluated. On a near-idle iface (~5 pkt/s) one stray error becomes 20%
+  # and pages falsely; below this the percentage is noise.
+  network_min_pps: 100.0
 
   # Number of TCP CLOSE_WAIT connections — WARN (application not closing connections)
   tcp_close_wait_warn: 100
@@ -180,6 +193,11 @@ thresholds:
 
   # Number of zombie processes — CRITICAL
   zombie_critical: 20
+
+  # Processes stuck in uninterruptible disk-sleep (D state). Brief D state during
+  # blocking I/O is normal, so alert on a sustained count rather than on > 0.
+  disk_sleep_warn: 5
+  disk_sleep_critical: 20
 
   # Any OOM kill triggers EMERGENCY (int: minimum kill count to alert)
   oom_kills_critical: 1
@@ -283,6 +301,16 @@ alerts:
   # Maximum number of alerts to include in a single grouped dispatch
   max_alerts_per_dispatch: 10
 
+  # Flap suppression. A threshold breach must persist this many consecutive
+  # collection cycles before it fires (debounce); a fired alert is only
+  # recovered after the condition stays resolved this many consecutive cycles
+  # (hysteresis). Together they stop a metric oscillating across a threshold from
+  # producing a fire/recover storm. Set both to 1 for immediate fire/recover.
+  # Intelligence (velocity/anomaly/forecast) and EMERGENCY alerts (OOM kill,
+  # spot termination) bypass the debounce and always fire instantly.
+  breach_cycles_to_alert: 2
+  recovery_clear_cycles: 2
+
   # --- Slack ---
   slack:
     enabled: false
@@ -376,6 +404,7 @@ app_health_checks: []
 #     timeout_seconds: 5                   # seconds before the check times out
 #     expected_status_code: 200            # for http checks: required HTTP status
 #     critical_on_failure: true            # true = CRITICAL alert; false = WARN alert
+#     failure_threshold: 2                 # consecutive failed probes before alerting
 #     headers: {}                          # optional HTTP headers for http checks
 #
 #   - name: "postgres"

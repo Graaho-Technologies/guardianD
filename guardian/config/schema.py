@@ -43,12 +43,22 @@ class ThresholdConfig:
     disk_await_ebs_critical_ms: float = 100.0
     disk_await_nvme_warn_ms: float = 10.0
     disk_await_nvme_critical_ms: float = 50.0
+    # Minimum raw I/O operations in a collection interval before disk latency
+    # (await_ms = total_time / total_ops) is evaluated. await is an average over
+    # very few ops on an idle disk, so a single slow I/O (one EBS fsync at 60ms)
+    # reads as a CRITICAL latency spike. Below this op count, skip the eval.
+    disk_await_min_ops: float = 50.0
 
     # Network
     network_error_rate_warn: float = 0.1
     network_error_rate_critical: float = 1.0
     network_drop_rate_warn: float = 0.05
     network_drop_rate_critical: float = 0.5
+    # Minimum packets/sec (sent+recv) on an interface before its error/drop rate
+    # is evaluated. error_rate = errors/total_packets, so on a near-idle iface
+    # (~5 pkt/s) a single stray error reads as 20% → CRITICAL. Below this, the
+    # percentage is statistical noise; skip the eval.
+    network_min_pps: float = 100.0
     tcp_close_wait_warn: int = 100
     tcp_close_wait_critical: int = 500
     tcp_time_wait_warn: int = 1000
@@ -57,6 +67,11 @@ class ThresholdConfig:
     # Process
     zombie_warn: int = 5
     zombie_critical: int = 20
+    # Processes in uninterruptible disk-sleep (D state). Any process doing
+    # blocking I/O shows "D" momentarily — normal. Only a sustained backlog
+    # indicates an I/O problem, so alert on a count, not on > 0.
+    disk_sleep_warn: int = 5
+    disk_sleep_critical: int = 20
 
     # System events
     oom_kills_critical: int = 1
@@ -154,6 +169,16 @@ class AlertConfig:
     recovery_notifications: bool = True
     group_alerts: bool = True
     max_alerts_per_dispatch: int = 10
+    # Flap suppression. A standard threshold breach must persist for this many
+    # consecutive collection cycles before it fires (debounce); a fired alert is
+    # only cleared/recovered after the condition stays resolved for this many
+    # consecutive cycles (hysteresis). Together they stop a metric oscillating
+    # across a threshold from producing a fire/recover storm. Set both to 1 to
+    # restore immediate fire/recover. Intelligence (velocity/anomaly/forecast)
+    # and EMERGENCY alerts (OOM, spot termination) bypass the debounce — they are
+    # single-cycle events that must fire instantly.
+    breach_cycles_to_alert: int = 2
+    recovery_clear_cycles: int = 2
     slack: SlackConfig = field(default_factory=SlackConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     email: EmailConfig = field(default_factory=EmailConfig)
@@ -190,6 +215,10 @@ class AppHealthCheck:
     timeout_seconds: int = 5
     expected_status_code: int = 200
     critical_on_failure: bool = True
+    # Number of consecutive failed probes before an alert fires. A single
+    # transient 502/timeout during a deploy, restart, or GC pause should not
+    # page; require the failure to be sustained. Set to 1 for immediate alerting.
+    failure_threshold: int = 2
     headers: Dict[str, str] = field(default_factory=dict)
 
 
@@ -233,6 +262,12 @@ class IntelligenceConfig:
     forecast_enabled: bool = True
     forecast_collectors: List[str] = field(default_factory=lambda: ["disk", "memory"])
     fingerprint_enabled: bool = True
+    # Forecast gating. Require at least this many samples before fitting a trend
+    # (short windows extrapolate noise into "will fill" alerts), and require the
+    # linear fit to explain at least this fraction of variance (R²) before
+    # projecting — a slope through pure noise is not a real trend.
+    forecast_min_samples: int = 30
+    forecast_min_r2: float = 0.9
 
 
 @dataclass
@@ -241,8 +276,10 @@ class CollectorConfig:
     process_top_n: int = 10
     ec2_imds_timeout: int = 2
     spot_interruption_check: bool = True
-    dns_check_host: str = "169.254.169.253"
-    dns_check_fallback: str = "8.8.8.8"
+    # MUST be a hostname, not an IP literal — resolving an IP does no DNS query,
+    # which would make the DNS health check permanently pass (see FIX-9).
+    dns_check_host: str = "amazonaws.com"
+    dns_check_fallback: str = "1.1.1.1"
     disk_type_detection: bool = True
 
 

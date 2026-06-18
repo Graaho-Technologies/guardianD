@@ -52,3 +52,24 @@ def test_network_skips_loopback(mocker):
 
     assert "lo" not in snap.metrics["interfaces"]
     assert "eth0" in snap.metrics["interfaces"]
+
+
+def test_dns_latency_unhealthy_on_failure(mocker):
+    # FIX-9: a real resolution failure must surface as unhealthy (-1.0).
+    from guardian.collector import network as net_mod
+    mocker.patch("socket.getaddrinfo", side_effect=OSError("no resolver"))
+    assert net_mod._dns_latency("amazonaws.com") == -1.0
+
+
+def test_dns_latency_healthy_on_success(mocker):
+    from guardian.collector import network as net_mod
+    mocker.patch("socket.getaddrinfo", return_value=[("fam", "type", 0, "", ("1.2.3.4", 0))])
+    assert net_mod._dns_latency("amazonaws.com") >= 0.0
+
+
+def test_dns_default_host_is_a_hostname():
+    # Guard against regressing to an IP literal, which would do no DNS query.
+    from guardian.collector import network as net_mod
+    import inspect
+    default = inspect.signature(net_mod._dns_latency).parameters["host"].default
+    assert not default.replace(".", "").isdigit()

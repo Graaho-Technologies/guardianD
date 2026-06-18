@@ -111,7 +111,10 @@ class TrendForecaster:
     ) -> Optional[Alert]:
         n = min(len(values), _MAX_HISTORY)
         values = values[-n:]
-        if len(values) < _MIN_VALUES:
+        # Require a meaningful history before fitting — a line on ~100s of data
+        # projected hours ahead invents trends. Configurable, floored at _MIN_VALUES.
+        min_samples = max(_MIN_VALUES, self.config.intelligence.forecast_min_samples)
+        if len(values) < min_samples:
             return None
 
         x = np.arange(len(values))
@@ -123,6 +126,20 @@ class TrendForecaster:
             return None
 
         if slope <= 0:
+            return None
+
+        # Goodness-of-fit gate: polyfit returns a slope even for pure noise, so a
+        # slight positive drift on a non-monotonic series (logs rotate, caches
+        # grow/shrink) would project a false "disk will fill". Only forecast when
+        # the linear fit explains enough variance (R²).
+        y = np.asarray(values, dtype=float)
+        pred = slope * x_minutes + intercept
+        ss_res = float(np.sum((y - pred) ** 2))
+        ss_tot = float(np.sum((y - y.mean()) ** 2))
+        if ss_tot <= 0.0:
+            return None  # perfectly flat — no trend
+        r2 = 1.0 - (ss_res / ss_tot)
+        if r2 < self.config.intelligence.forecast_min_r2:
             return None
 
         current = values[-1]
@@ -156,6 +173,7 @@ class TrendForecaster:
                 "rate_per_min": round(rate_per_min, 4),
                 "eta_minutes": round(eta_minutes, 1),
                 "eta_hours": round(eta_hours, 2),
+                "r2": round(r2, 3),
             },
             instance_id=instance_id,
             instance_name=self.config.instance_name or instance_id,

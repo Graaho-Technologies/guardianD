@@ -135,7 +135,7 @@ def test_disk_latency_critical_ssd():
     r = _router()
     snaps = {"disk": make_snapshot("disk", {
         "mounts": [],
-        "io": {"sda": {"await_ms": 60.0, "disk_type": "ssd"}},
+        "io": {"sda": {"await_ms": 60.0, "disk_type": "ssd", "total_ops": 200}},
     })}
     alerts = r.evaluate(snaps)
     lat = [a for a in alerts if "Latency" in a.title and a.severity == AlertSeverity.CRITICAL]
@@ -146,7 +146,7 @@ def test_disk_latency_warn_ebs():
     r = _router()
     snaps = {"disk": make_snapshot("disk", {
         "mounts": [],
-        "io": {"xvda": {"await_ms": 25.0, "disk_type": "ebs"}},
+        "io": {"xvda": {"await_ms": 25.0, "disk_type": "ebs", "total_ops": 200}},
     })}
     alerts = r.evaluate(snaps)
     lat = [a for a in alerts if "Latency" in a.title and a.severity == AlertSeverity.WARN]
@@ -195,7 +195,8 @@ def test_network_close_wait_warn():
 def test_network_error_rate_warn():
     r = _router()
     snaps = {"network": make_snapshot("network", {
-        "interfaces": {"eth0": {"error_rate_percent": 0.5, "drop_rate_percent": 0.0}},
+        "interfaces": {"eth0": {"error_rate_percent": 0.5, "drop_rate_percent": 0.0,
+                                "packets_sent_per_sec": 500, "packets_recv_per_sec": 500}},
         "tcp_connections": {"close_wait": 0, "syn_recv": 0},
         "dns_healthy": True, "dns_latency_ms": 1.0,
     })}
@@ -207,7 +208,8 @@ def test_network_error_rate_warn():
 def test_network_drop_rate_critical():
     r = _router()
     snaps = {"network": make_snapshot("network", {
-        "interfaces": {"eth0": {"error_rate_percent": 0.0, "drop_rate_percent": 2.0}},
+        "interfaces": {"eth0": {"error_rate_percent": 0.0, "drop_rate_percent": 2.0,
+                                "packets_sent_per_sec": 500, "packets_recv_per_sec": 500}},
         "tcp_connections": {"close_wait": 0, "syn_recv": 0},
         "dns_healthy": True, "dns_latency_ms": 1.0,
     })}
@@ -253,12 +255,13 @@ def test_process_zombie_critical():
 
 def test_process_disk_sleep_warn():
     r = _router()
+    # Default disk_sleep_warn is 5 — a sustained backlog, not a single transient D.
     snaps = {"process": make_snapshot("process", {
         "zombie": 0,
-        "disk_sleep_procs": [{"pid": 42, "name": "dd", "cmdline": "dd if=/dev/sda"}],
+        "disk_sleep_procs": [{"pid": i, "name": "dd", "cmdline": "dd"} for i in range(6)],
     })}
     alerts = r.evaluate(snaps)
-    ds = [a for a in alerts if "Disk-Sleep" in a.title]
+    ds = [a for a in alerts if "Disk-Sleep" in a.title and a.severity == AlertSeverity.WARN]
     assert len(ds) >= 1
 
 

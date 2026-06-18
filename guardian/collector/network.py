@@ -78,8 +78,15 @@ def _parse_sockstat() -> Dict[str, int]:
     return result
 
 
-def _dns_latency(host: str = "169.254.169.253", timeout: float = 2.0) -> float:
-    """Return latency in ms, or -1.0 on failure."""
+def _dns_latency(host: str = "amazonaws.com", timeout: float = 2.0) -> float:
+    """Time a real DNS resolution. Return latency in ms, or -1.0 on failure.
+
+    NOTE: ``host`` MUST be a hostname, not an IP literal — ``getaddrinfo`` on an
+    IP literal performs no DNS query (it just parses the address and returns
+    instantly), so a literal would make ``dns_healthy`` permanently True and the
+    "DNS Resolution Failing" alert could never fire. Resolving a hostname via the
+    system resolver (the AWS VPC resolver on EC2) actually exercises DNS.
+    """
     try:
         start = time.time()
         socket.getaddrinfo(host, None)
@@ -93,7 +100,7 @@ def _dns_latency(host: str = "169.254.169.253", timeout: float = 2.0) -> float:
 class NetworkCollector(BaseCollector):
     name = "network"
 
-    def __init__(self, dns_check_host: str = "169.254.169.253") -> None:
+    def __init__(self, dns_check_host: str = "amazonaws.com") -> None:
         self._prev_net: Optional[Dict] = None  # type: ignore[type-arg]
         self._prev_snmp: Tuple[int, int, int] = (0, 0, 0)
         self._prev_time: float = 0.0
