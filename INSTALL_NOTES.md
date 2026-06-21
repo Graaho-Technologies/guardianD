@@ -141,3 +141,31 @@ Mirrors `setup telegram`. Prompts for the API key (hidden input), base URL, mode
 - `pyproject.toml` — removed split-brain `[project]` table (Issue 1).
 - `systemd/guardian.service` — moved StartLimit keys to `[Unit]` (Issue 3).
 - `guardian/config/schema.py`, `guardian/intelligence/velocity.py`, `guardian/intelligence/anomaly.py`, `guardian/config/loader.py`, `config/guardian.example.yaml` + velocity/anomaly tests — absolute-magnitude floors to stop the intelligence false-positive storm (Issue 7).
+
+## AWS account identity on alerts (2026-06-21)
+
+**Feature** — every alert now carries **AWS Account Name** and a **redacted AWS Account ID**
+alongside Instance and Environment, across all channels (Slack, Telegram, Email, Webhook),
+the jsonl alert log, the REST `/status` endpoint, and Prometheus metric labels.
+See `NEED_TO_FIX.md` → *FEAT-1* for the full code map.
+
+**Install/operator steps**
+- **Account ID**: nothing to do on EC2 — it auto-detects from the IMDS instance-identity
+  document (`/latest/dynamic/instance-identity/document` → `accountId`). It is always shown
+  **redacted** `starting****ending` (first 4 + `****` + last 4); the full 12-digit value never
+  appears anywhere. Override (or set off-EC2) with `aws_account_id:` / `GUARDIAN_AWS_ACCOUNT_ID`.
+- **Account name**: IMDS does **not** expose the account alias, so set `aws_account_name:` in
+  `/etc/guardian/guardian.yaml` (or `GUARDIAN_AWS_ACCOUNT_NAME`). Documented in
+  `README.md` §"Set the basics", the env-var table, `config/guardian.example.yaml`, and
+  `config/guardian.env.example`.
+
+**Deployed to the live daemon**
+- Set `aws_account_name: "AlgoRec"` in `/etc/guardian/guardian.yaml` (backup saved as
+  `guardian.yaml.bak-20260621-183938`; `load_config` re-validated OK), left `aws_account_id`
+  unset for auto-detect, then `sudo pip install --no-deps --force-reinstall .` + `systemctl
+  restart guardian` → active, zero errors.
+- **Live proof:** `GET /api/v1/status` returns `aws_account_name: "AlgoRec"` and
+  `aws_account_id: "3814****3322"` (real account auto-detected, middle redacted). A WARN
+  `test-alert` to Telegram delivered (`"telegram": "sent"`) and renders both lines.
+- Suite: **287 passed**; the same 12 `tests/test_storage_log_writer.py` failures remain
+  (pre-existing, unrelated). Committed `b089650`, pushed to `origin/main`.

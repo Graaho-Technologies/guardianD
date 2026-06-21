@@ -144,7 +144,22 @@ instance_name: my-server        # shows up in every alert
 environment: production          # production | staging | dev
 ```
 
-**2. Storage paths — IMPORTANT if you are not root.** The defaults point at `/var/log/guardian` and `/var/lib/guardian`, which only root can write. Running as a normal user (typical on macOS/Windows/dev), point them at your home folder instead:
+**2. AWS account labels (optional, recommended on EC2).** Every alert also carries the AWS
+account it came from, next to the instance and environment. The **account ID auto-detects**
+from EC2 instance metadata (IMDS) — leave it blank. The **account name is not available from
+IMDS**, so set it yourself if you want a human label instead of just the number:
+
+```yaml
+aws_account_id: ""               # blank → auto-detected from IMDS (set to override)
+aws_account_name: "AlgoRec"      # human account alias (IMDS can't supply this — set it)
+```
+
+For safety the account ID is **redacted** in every alert, log, metric label, and API response as
+`starting****ending` (first 4 + last 4, e.g. `3814****3322`) — the full 12-digit ID is never
+shown. Off-EC2, both fields are simply blank unless you set them. (Env overrides:
+`GUARDIAN_AWS_ACCOUNT_ID`, `GUARDIAN_AWS_ACCOUNT_NAME`.)
+
+**3. Storage paths — IMPORTANT if you are not root.** The defaults point at `/var/log/guardian` and `/var/lib/guardian`, which only root can write. Running as a normal user (typical on macOS/Windows/dev), point them at your home folder instead:
 
 ```yaml
 storage:
@@ -290,6 +305,8 @@ CPU steal at 23.4%
 
 🖥 Instance: ip-172-31-71-190
 🌍 Environment: production
+🏢 AWS Account: AlgoRec
+🔢 Account ID: 3814****3322
 🕐 Time: 2026-06-17 09:33:59 UTC
 
 Triggering Metrics:
@@ -370,6 +387,8 @@ sudo systemctl restart guardian             # env changes need a restart (not ju
 | `GUARDIAN_OPENAI_API_KEY` *(or `OPENAI_API_KEY`)* | `ai.api_key` | AI-assisted alerts |
 | `GUARDIAN_INSTANCE_NAME` | `instance_name` | Identity label |
 | `GUARDIAN_ENVIRONMENT` | `environment` | Identity label |
+| `GUARDIAN_AWS_ACCOUNT_ID` | `aws_account_id` | Identity label (blank → IMDS auto-detect; shown redacted) |
+| `GUARDIAN_AWS_ACCOUNT_NAME` | `aws_account_name` | Identity label (account alias; IMDS can't supply it) |
 
 Notes:
 - **`chmod 600`** the env file (and any config file holding a secret) — it's root-only and the daemon runs as root.
@@ -636,6 +655,8 @@ Disk / at 96.2%
 
 🖥 Instance: ip-172-31-71-190
 🌍 Environment: production
+🏢 AWS Account: AlgoRec
+🔢 Account ID: 3814****3322
 ```
 
 The same AI interpretation + fix is attached to Slack, Email, and the webhook payload (`ai_meaning` / `ai_suggestion`).
