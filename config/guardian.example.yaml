@@ -12,6 +12,17 @@ instance_name: "prod-api-01"
 # Env: GUARDIAN_ENVIRONMENT
 environment: "production"
 
+# AWS account identity — included on every alert across all channels
+# (Slack, Telegram, Email, Webhook), the jsonl alert log, the REST API
+# /status endpoint, and Prometheus metric labels.
+#   aws_account_id   — leave blank to auto-detect from the EC2 IMDS
+#                      instance-identity document; set to override.
+#                      Env: GUARDIAN_AWS_ACCOUNT_ID
+#   aws_account_name — the human account alias (NOT exposed by IMDS),
+#                      so set it here. Env: GUARDIAN_AWS_ACCOUNT_NAME
+aws_account_id: ""
+aws_account_name: "my-aws-account"
+
 # ------------------------------------------------------------
 # Collector settings — control how often metrics are gathered
 # ------------------------------------------------------------

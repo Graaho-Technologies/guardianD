@@ -70,6 +70,8 @@ class LogWriter:
             "instance_id": alert.instance_id,
             "instance_name": alert.instance_name,
             "environment": alert.environment,
+            "aws_account_id": alert.aws_account_id,
+            "aws_account_name": alert.aws_account_name,
             "fingerprint": alert.fingerprint,
             "is_recovery": alert.is_recovery,
             "version": _VERSION,

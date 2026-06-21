@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional
 
-from .alerter.base import BaseAlerter
+from .alerter.base import BaseAlerter, resolve_account
 from .alerter.email_alerter import EmailAlerter
 from .alerter.router import AlertRouter
 from .alerter.slack import SlackAlerter
@@ -188,10 +188,15 @@ class GuardianDaemon:
         instance_id = ""
         if ec2_snap and ec2_snap.metrics:
             instance_id = ec2_snap.metrics.get("instance_id", "")
+        # Redacted account id (starting****ending) so the full value never
+        # appears in metric labels either.
+        acct_id, acct_name = resolve_account(cfg, snapshots)
         label_values = {
             "instance_id": instance_id,
             "instance_name": cfg.instance_name,
             "environment": cfg.environment,
+            "aws_account_id": acct_id,
+            "aws_account_name": acct_name,
         }
         # Update prometheus label_values BEFORE dispatching alerts so record_alert
         # has correct instance labels from the first cycle onwards.

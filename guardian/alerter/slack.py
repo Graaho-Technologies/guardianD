@@ -102,6 +102,8 @@ class SlackAlerter(BaseAlerter):
                                 "fields": [
                                     {"type": "mrkdwn", "text": f"*Instance:*\n{alert.instance_name}"},
                                     {"type": "mrkdwn", "text": f"*Environment:*\n{alert.environment}"},
+                                    {"type": "mrkdwn", "text": f"*AWS Account:*\n{alert.aws_account_name or '—'}"},
+                                    {"type": "mrkdwn", "text": f"*Account ID:*\n{alert.aws_account_id or '—'}"},
                                     {"type": "mrkdwn", "text": f"*Time:*\n{ts_human}"},
                                     {"type": "mrkdwn", "text": f"*Category:*\n{alert.category}"},
                                 ],

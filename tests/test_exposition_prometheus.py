@@ -33,8 +33,10 @@ _LABEL_VALUES = {
     "instance_id": "i-test123",
     "instance_name": "test-host",
     "environment": "test",
+    "aws_account_id": "123456789012",
+    "aws_account_name": "test-account",
 }
-_LVS = ["i-test123", "test-host", "test"]
+_LVS = ["i-test123", "test-host", "test", "123456789012", "test-account"]
 
 
 @pytest.fixture(scope="module", autouse=True)

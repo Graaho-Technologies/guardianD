@@ -21,7 +21,9 @@ try:
 except ImportError:
     _log.warning("prometheus-client not installed. Prometheus exposition disabled. Install with: pip install prometheus-client")
 
-_COMMON_LABELS: List[str] = ["instance_id", "instance_name", "environment"]
+_COMMON_LABELS: List[str] = [
+    "instance_id", "instance_name", "environment", "aws_account_id", "aws_account_name",
+]
 _metrics: Dict[str, Any] = {}
 _metrics_lock = threading.Lock()
 _metrics_initialized = False
@@ -212,6 +214,8 @@ def update_metrics(snapshots: Dict[str, Any], label_values: Dict[str, str]) -> N
         label_values.get("instance_id", ""),
         label_values.get("instance_name", ""),
         label_values.get("environment", ""),
+        label_values.get("aws_account_id", ""),
+        label_values.get("aws_account_name", ""),
     ]
 
     try:
@@ -530,6 +534,8 @@ class PrometheusExpositionServer:
                 self._label_values.get("instance_id", ""),
                 self._label_values.get("instance_name", ""),
                 self._label_values.get("environment", ""),
+                self._label_values.get("aws_account_id", ""),
+                self._label_values.get("aws_account_name", ""),
             ]
             if is_recovery:
                 _metrics["c_alerts_recovered"].labels(*lvs, category).inc()

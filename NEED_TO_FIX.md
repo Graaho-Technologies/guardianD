@@ -238,3 +238,36 @@ pre-existing failures unrelated to any of this** — they fail on clean `main` t
 - `thresholds.disk_sleep_warn` / `disk_sleep_critical` (D-state, e.g. 5/20)
 - `app_health` `failure_threshold` (consecutive failures, e.g. 2)
 - `intelligence.forecast_min_samples` and `forecast_min_r2` (e.g. 30 / 0.9)
+
+---
+
+## Feature additions (post-audit)
+
+### FEAT-1 — AWS account identity on every alert ✅ DONE (2026-06-21)
+Alongside **Instance** and **Environment**, alerts now also carry **AWS Account Name** and
+**AWS Account ID**, propagated to every channel.
+
+- **Config** (`schema.py` / `loader.py` / both templates): new top-level
+  `aws_account_id` and `aws_account_name`. `aws_account_id` auto-detects from the EC2 IMDS
+  **instance-identity document** (`/latest/dynamic/instance-identity/document` → `accountId`)
+  when left blank; set it to override. `aws_account_name` is the human account alias, which
+  IMDS does **not** expose, so it must be set in config. Env overrides:
+  `GUARDIAN_AWS_ACCOUNT_ID`, `GUARDIAN_AWS_ACCOUNT_NAME`.
+- **Collector** (`ec2.py`): parses `accountId` (and region fallback) from the identity doc;
+  `aws_account_id` key always present (blank off-EC2 / on error).
+- **Model** (`alerter/base.py`): `Alert.aws_account_id` / `Alert.aws_account_name` fields +
+  shared `resolve_account(config, snapshots)` helper (config override wins over IMDS).
+- **Redaction**: the account ID is masked `starting****ending` (first 4 + `****` + last 4,
+  e.g. `1234****9012`) via `mask_account_id()`, applied centrally in `resolve_account`
+  (plus the `_make_alert` config fallback and `main.py` Prometheus labels) so the **full
+  12-digit ID never appears** in any channel, log, metric label, or REST response.
+- **Propagated to all channels**: Slack (fields), Telegram (lines), Email (identity table),
+  Webhook (JSON payload), jsonl alert log, REST `/status`, and Prometheus metric labels
+  (`_COMMON_LABELS`). Threshold, intelligence (anomaly/velocity/forecast), recovery, and
+  escalation alerts all set the fields.
+- **Tests**: `test_collector_ec2.py` (accountId parsed / blank fallback / off-EC2 key present);
+  `test_alerter_router.py` (masked IMDS value, config override, recovery preserves account,
+  `mask_account_id` format, full-ID-never-leaks guard); `test_alerter_slack.py` (payload renders
+  redacted account); `test_exposition_prometheus.py` label fixtures extended to 5 labels.
+  Full suite: **287 passed**; same 12 pre-existing `test_storage_log_writer.py` failures
+  remain (unrelated).

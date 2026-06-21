@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from ..alerter.base import Alert, AlertSeverity, make_fingerprint
+from ..alerter.base import Alert, AlertSeverity, make_fingerprint, resolve_account
 from ..collector.base import MetricSnapshot
 from ..config.schema import GuardianConfig
 from ..utils.logger import get_logger
@@ -57,6 +57,7 @@ class TrendForecaster:
         t = self.config.thresholds
         interval = self.config.collector.interval_seconds
         iid = _instance_id(snapshots)
+        acct_id, acct_name = resolve_account(self.config, snapshots)
         warn_hours = t.forecast_disk_full_warn_hours
         crit_hours = t.forecast_disk_full_critical_hours
 
@@ -75,6 +76,7 @@ class TrendForecaster:
                         f"{mountpoint} disk", warn_hours, crit_hours,
                         iid, collector_name,
                         f"Disk Space Forecast: {mountpoint}",
+                        acct_id, acct_name,
                     )
                     if alert:
                         alerts.append(alert)
@@ -90,6 +92,7 @@ class TrendForecaster:
                     f"{collector_name}.{metric_path}", warn_hours, crit_hours,
                     iid, collector_name,
                     f"{label} Forecast",
+                    acct_id, acct_name,
                 )
                 if alert:
                     alerts.append(alert)
@@ -108,6 +111,8 @@ class TrendForecaster:
         instance_id: str,
         collector: str,
         title: str,
+        aws_account_id: str = "",
+        aws_account_name: str = "",
     ) -> Optional[Alert]:
         n = min(len(values), _MAX_HISTORY)
         values = values[-n:]
@@ -178,6 +183,8 @@ class TrendForecaster:
             instance_id=instance_id,
             instance_name=self.config.instance_name or instance_id,
             environment=self.config.environment,
+            aws_account_id=aws_account_id,
+            aws_account_name=aws_account_name,
             timestamp=time.time(),
             fingerprint=make_fingerprint("intelligence", title),
             forecast_eta_minutes=round(eta_minutes, 1),

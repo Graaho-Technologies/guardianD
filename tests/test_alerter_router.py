@@ -312,3 +312,76 @@ def test_dstate_above_threshold_alerts_with_stable_title():
     assert d6 and d8
     # Stable fingerprint across differing counts (count lives in the message).
     assert d6[0].fingerprint == d8[0].fingerprint
+
+
+# --- AWS account identity propagation -----------------------------------------
+
+def test_alert_carries_account_id_from_imds():
+    # No config override → account id comes from the EC2 snapshot (IMDS).
+    router = _router(cpu_critical=95.0)
+    snaps = {
+        "cpu": make_snapshot("cpu", {"percent_total": 96.0, "times_steal": 0.0,
+                                     "times_iowait": 0.0, "load_avg_normalized_1m": 0.0}),
+        "ec2": make_snapshot("ec2", {"is_ec2": True, "instance_id": "i-test",
+                                     "aws_account_id": "111122223333"}),
+    }
+    alerts = router.evaluate(snaps)
+    assert alerts
+    # ID is redacted starting****ending — full value never surfaced.
+    assert all(a.aws_account_id == "1111****3333" for a in alerts)
+
+
+def test_config_account_id_overrides_imds():
+    cfg = make_config(aws_account_id="999988887777", aws_account_name="prod-acct")
+    cfg.thresholds.cpu_critical = 95.0
+    router = AlertRouter(cfg, [])
+    snaps = {
+        "cpu": make_snapshot("cpu", {"percent_total": 96.0, "times_steal": 0.0,
+                                     "times_iowait": 0.0, "load_avg_normalized_1m": 0.0}),
+        "ec2": make_snapshot("ec2", {"is_ec2": True, "instance_id": "i-test",
+                                     "aws_account_id": "111122223333"}),
+    }
+    alerts = router.evaluate(snaps)
+    assert alerts
+    assert all(a.aws_account_id == "9999****7777" for a in alerts)
+    assert all(a.aws_account_name == "prod-acct" for a in alerts)
+
+
+def test_recovery_alert_preserves_account():
+    cfg = make_config(aws_account_id="123412341234", aws_account_name="acct-x")
+    cfg.thresholds.cpu_warn = 80.0
+    cfg.alerts.breach_cycles_to_alert = 1
+    cfg.alerts.recovery_clear_cycles = 1
+    router = AlertRouter(cfg, [])
+    breach = {"cpu": make_snapshot("cpu", {"percent_total": 85.0, "times_steal": 0.0,
+                                           "times_iowait": 0.0, "load_avg_normalized_1m": 0.0})}
+    clear = {"cpu": make_snapshot("cpu", {"percent_total": 10.0, "times_steal": 0.0,
+                                          "times_iowait": 0.0, "load_avg_normalized_1m": 0.0})}
+    router.dispatch(router.evaluate(breach))
+    recoveries = router._check_recovery(clear)
+    assert recoveries
+    assert recoveries[0].aws_account_id == "1234****1234"
+    assert recoveries[0].aws_account_name == "acct-x"
+
+
+def test_mask_account_id_format():
+    from guardian.alerter.base import mask_account_id
+    assert mask_account_id("123456789012") == "1234****9012"
+    assert mask_account_id("") == ""
+    # Too short to redact a middle → returned unchanged.
+    assert mask_account_id("1234") == "1234"
+
+
+def test_full_account_id_never_in_alert():
+    # The raw 12-digit ID must not leak onto the alert even though IMDS exposes it.
+    router = _router(cpu_critical=95.0)
+    snaps = {
+        "cpu": make_snapshot("cpu", {"percent_total": 96.0, "times_steal": 0.0,
+                                     "times_iowait": 0.0, "load_avg_normalized_1m": 0.0}),
+        "ec2": make_snapshot("ec2", {"is_ec2": True, "instance_id": "i-test",
+                                     "aws_account_id": "123456789012"}),
+    }
+    alerts = router.evaluate(snaps)
+    assert alerts
+    assert all(a.aws_account_id == "1234****9012" for a in alerts)
+    assert all("123456789012" != a.aws_account_id for a in alerts)

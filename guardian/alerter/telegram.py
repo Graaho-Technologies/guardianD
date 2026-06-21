@@ -66,6 +66,8 @@ class TelegramAlerter(BaseAlerter):
                 f"🎚 *Severity*: {escape_mdv2(severity_meaning(alert.severity))}\n\n"
                 f"🖥 *Instance*: `{escape_mdv2(alert.instance_name)}`\n"
                 f"🌍 *Environment*: `{escape_mdv2(alert.environment)}`\n"
+                f"🏢 *AWS Account*: `{escape_mdv2(alert.aws_account_name or '—')}`\n"
+                f"🔢 *Account ID*: `{escape_mdv2(alert.aws_account_id or '—')}`\n"
                 f"🕐 *Time*: {escape_mdv2(ts_human)}\n"
                 f"🆔 *ID*: `{escape_mdv2(alert.instance_id)}`\n"
             )

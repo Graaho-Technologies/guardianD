@@ -287,6 +287,12 @@ class CollectorConfig:
 class GuardianConfig:
     instance_name: str = ""
     environment: str = "production"
+    # AWS account identity — surfaced on every alert across all channels.
+    # aws_account_id is auto-detected from the IMDS instance-identity document
+    # when left blank; set it explicitly to override. aws_account_name is the
+    # human account alias, which is NOT exposed by IMDS, so it must be set here.
+    aws_account_id: str = ""
+    aws_account_name: str = ""
     collector: CollectorConfig = field(default_factory=CollectorConfig)
     thresholds: ThresholdConfig = field(default_factory=ThresholdConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)

@@ -64,3 +64,19 @@ def test_slack_handles_connection_error(mocker):
     alerter = SlackAlerter(_slack_config())
     result = alerter.send(make_alert(AlertSeverity.CRITICAL))
     assert result is False
+
+def test_slack_payload_includes_aws_account(mocker):
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value.status_code = 200
+
+    alerter = SlackAlerter(_slack_config())
+    alert = make_alert(AlertSeverity.CRITICAL)
+    # In production the field arrives already redacted (starting****ending).
+    alert.aws_account_id = "1111****3333"
+    alert.aws_account_name = "prod-account"
+    assert alerter.send(alert) is True
+
+    raw = mock_post.call_args[1]["data"]
+    assert "1111****3333" in raw
+    assert "prod-account" in raw
+    assert "AWS Account" in raw

@@ -47,7 +47,7 @@ def load_config(path: str) -> GuardianConfig:
 
     config = GuardianConfig()
 
-    for key in ("instance_name", "environment"):
+    for key in ("instance_name", "environment", "aws_account_id", "aws_account_name"):
         if key in raw:
             setattr(config, key, raw[key])
 
@@ -132,6 +132,10 @@ def _apply_env_overrides(config: GuardianConfig) -> None:
         config.instance_name = env["GUARDIAN_INSTANCE_NAME"]
     if "GUARDIAN_ENVIRONMENT" in env:
         config.environment = env["GUARDIAN_ENVIRONMENT"]
+    if "GUARDIAN_AWS_ACCOUNT_ID" in env:
+        config.aws_account_id = env["GUARDIAN_AWS_ACCOUNT_ID"]
+    if "GUARDIAN_AWS_ACCOUNT_NAME" in env:
+        config.aws_account_name = env["GUARDIAN_AWS_ACCOUNT_NAME"]
 
 
 def validate_config(config: GuardianConfig) -> List[str]:
@@ -256,6 +260,13 @@ def generate_default_config(path: str) -> None:
 
 instance_name: "prod-api-01"
 environment: "production"
+
+# AWS account identity — included on every alert across all channels.
+# aws_account_id is auto-detected from EC2 IMDS when left blank; set it to override.
+# aws_account_name is the human account alias (NOT available via IMDS) — set it here.
+# Env overrides: GUARDIAN_AWS_ACCOUNT_ID, GUARDIAN_AWS_ACCOUNT_NAME
+aws_account_id: ""
+aws_account_name: "my-aws-account"
 
 collector:
   interval_seconds: 10

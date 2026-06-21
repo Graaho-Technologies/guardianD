@@ -10,7 +10,7 @@ from ..collector.base import MetricSnapshot
 from ..config.schema import GuardianConfig
 from ..utils.logger import get_logger
 from .ai import AIEnricher
-from .base import Alert, AlertSeverity, BaseAlerter, make_fingerprint
+from .base import Alert, AlertSeverity, BaseAlerter, make_fingerprint, mask_account_id, resolve_account
 
 _log = get_logger(__name__)
 
@@ -40,6 +40,8 @@ def _make_alert(
     is_recovery: bool = False,
     anomaly_score: float = 0.0,
     forecast_eta_minutes: float = 0.0,
+    aws_account_id: str = "",
+    aws_account_name: str = "",
 ) -> Alert:
     fp = _fingerprint(category, title)
     return Alert(
@@ -54,6 +56,8 @@ def _make_alert(
         environment=config.environment,
         timestamp=time.time(),
         fingerprint=fp,
+        aws_account_id=aws_account_id or mask_account_id(config.aws_account_id),
+        aws_account_name=aws_account_name or config.aws_account_name,
         is_recovery=is_recovery,
         anomaly_score=anomaly_score,
         forecast_eta_minutes=forecast_eta_minutes,
@@ -84,9 +88,11 @@ class AlertRouter:
     def evaluate(self, snapshots: Dict[str, MetricSnapshot]) -> List[Alert]:
         alerts: List[Alert] = []
         instance_id = self._instance_id(snapshots)
+        acct_id, acct_name = resolve_account(self.config, snapshots)
 
         def _a(sev: AlertSeverity, cat: str, title: str, msg: str, metrics: dict) -> None:  # type: ignore[type-arg]
-            alerts.append(_make_alert(sev, cat, title, msg, metrics, self.config, instance_id))
+            alerts.append(_make_alert(sev, cat, title, msg, metrics, self.config, instance_id,
+                                      aws_account_id=acct_id, aws_account_name=acct_name))
 
         t = self.config.thresholds
 
@@ -341,6 +347,7 @@ class AlertRouter:
                     f"Unit {unit_name} failed",
                     {"unit": unit_name, "active": unit.get("active", "")},
                     self.config, instance_id,
+                    aws_account_id=acct_id, aws_account_name=acct_name,
                 )
                 alerts.append(a)
 
@@ -426,6 +433,7 @@ class AlertRouter:
                         f"Health check '{name}' failed: {err}",
                         {"name": name, "type": chk.get("type"), "error": err},
                         self.config, instance_id,
+                        aws_account_id=acct_id, aws_account_name=acct_name,
                     )
                     a.fingerprint = fp
                     alerts.append(a)
@@ -468,6 +476,8 @@ class AlertRouter:
                 instance_id=orig.instance_id,
                 instance_name=orig.instance_name,
                 environment=orig.environment,
+                aws_account_id=orig.aws_account_id,
+                aws_account_name=orig.aws_account_name,
                 timestamp=now,
                 fingerprint=make_fingerprint(orig.category, f"recovery:{orig.title}"),
                 is_recovery=True,
@@ -523,6 +533,8 @@ class AlertRouter:
                         instance_id=alert.instance_id,
                         instance_name=alert.instance_name,
                         environment=alert.environment,
+                        aws_account_id=alert.aws_account_id,
+                        aws_account_name=alert.aws_account_name,
                         timestamp=now,
                         fingerprint=fp,
                         is_recovery=alert.is_recovery,

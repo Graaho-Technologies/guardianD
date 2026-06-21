@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
-from ..alerter.base import Alert, AlertSeverity
+from ..alerter.base import Alert, AlertSeverity, resolve_account
 from ..config.schema import APIConfig
 from ..utils.logger import get_logger
 
@@ -149,6 +149,7 @@ class _Handler(BaseHTTPRequestHandler):
         uptime = time.time() - daemon._start_time
         ec2_snap = (daemon._last_snapshots or {}).get("ec2", None)
         instance_id = ec2_snap.metrics.get("instance_id", "") if ec2_snap and ec2_snap.metrics else ""
+        acct_id, acct_name = resolve_account(daemon.config, daemon._last_snapshots or {})
 
         active_alerts = list(daemon.router._active.values()) if daemon.router else []
 
@@ -168,6 +169,8 @@ class _Handler(BaseHTTPRequestHandler):
             "instance_id": instance_id,
             "instance_name": daemon.config.instance_name,
             "environment": daemon.config.environment,
+            "aws_account_id": acct_id,
+            "aws_account_name": acct_name,
             "collectors": collectors_info,
             "last_collection_ts": daemon._last_collection_ts,
             "active_alert_count": len(active_alerts),
@@ -248,6 +251,8 @@ class _Handler(BaseHTTPRequestHandler):
             instance_id=daemon.config.instance_name,
             instance_name=daemon.config.instance_name,
             environment=daemon.config.environment,
+            aws_account_id=resolve_account(daemon.config, daemon._last_snapshots or {})[0],
+            aws_account_name=daemon.config.aws_account_name,
             timestamp=time.time(),
             fingerprint="test-alert",
         )

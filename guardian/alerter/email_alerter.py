@@ -30,6 +30,8 @@ _HTML_TEMPLATE = """\
       <tr><th style="text-align:left;padding:4px 8px;background:#f5f5f5;">Field</th><th style="text-align:left;padding:4px 8px;background:#f5f5f5;">Value</th></tr>
       <tr><td style="padding:4px 8px;">Instance</td><td style="padding:4px 8px;">{instance_name}</td></tr>
       <tr><td style="padding:4px 8px;">Environment</td><td style="padding:4px 8px;">{environment}</td></tr>
+      <tr><td style="padding:4px 8px;">AWS Account</td><td style="padding:4px 8px;">{aws_account_name}</td></tr>
+      <tr><td style="padding:4px 8px;">AWS Account ID</td><td style="padding:4px 8px;">{aws_account_id}</td></tr>
       <tr><td style="padding:4px 8px;">Region</td><td style="padding:4px 8px;">{region}</td></tr>
       <tr><td style="padding:4px 8px;">Instance Type</td><td style="padding:4px 8px;">{instance_type}</td></tr>
       <tr><td style="padding:4px 8px;">Time</td><td style="padding:4px 8px;">{timestamp}</td></tr>
@@ -105,6 +107,8 @@ class EmailAlerter(BaseAlerter):
                 title=alert.title,
                 instance_name=alert.instance_name,
                 environment=alert.environment,
+                aws_account_name=alert.aws_account_name or "—",
+                aws_account_id=alert.aws_account_id or "—",
                 region=alert.metrics.get("region", ""),
                 instance_type=alert.metrics.get("instance_type", ""),
                 timestamp=ts_human,

@@ -42,6 +42,8 @@ class WebhookAlerter(BaseAlerter):
                 "instance_id": alert.instance_id,
                 "instance_name": alert.instance_name,
                 "environment": alert.environment,
+                "aws_account_id": alert.aws_account_id,
+                "aws_account_name": alert.aws_account_name,
                 "timestamp": alert.timestamp,
                 "timestamp_iso": ts_iso,
                 "is_recovery": alert.is_recovery,

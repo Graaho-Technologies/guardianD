@@ -36,6 +36,10 @@ def test_ec2_on_ec2(mocker):
         "/latest/meta-data/iam/security-credentials/": _mock_response("", 404),
         "/latest/meta-data/spot/termination-time": _mock_response("", 404),
         "/latest/meta-data/spot/instance-action": _mock_response("", 404),
+        "/latest/dynamic/instance-identity/document": _mock_response(
+            '{"accountId": "123456789012", "region": "us-east-1", '
+            '"instanceId": "i-1234567890abcdef0"}'
+        ),
     }
 
     def mock_get(url, **kwargs):
@@ -57,3 +61,39 @@ def test_ec2_on_ec2(mocker):
     assert snap.metrics["instance_id"] == "i-1234567890abcdef0"
     assert snap.metrics["instance_type"] == "t3.medium"
     assert snap.metrics["spot_interruption"]["scheduled"] is False
+    # AWS account id is parsed from the signed instance-identity document.
+    assert snap.metrics["aws_account_id"] == "123456789012"
+
+
+def test_ec2_account_id_blank_when_identity_doc_missing(mocker):
+    # No identity document available → account id falls back to empty string,
+    # never raises, and the rest of the snapshot still populates.
+    responses = {
+        "/latest/api/token": _mock_response("fake-token"),
+        "/latest/meta-data/instance-id": _mock_response("i-abc"),
+        "/latest/meta-data/placement/availability-zone": _mock_response("us-east-1a"),
+        "/latest/meta-data/placement/region": _mock_response("us-east-1"),
+    }
+
+    def mock_get(url, **kwargs):
+        for path, resp in responses.items():
+            if url.endswith(path):
+                return resp
+        r = MagicMock()
+        r.status_code = 404
+        r.text = ""
+        return r
+
+    mocker.patch("requests.put", return_value=_mock_response("fake-token"))
+    mocker.patch("requests.get", side_effect=mock_get)
+
+    snap = EC2Collector(timeout=2).collect()
+    assert snap.metrics["is_ec2"] is True
+    assert snap.metrics["aws_account_id"] == ""
+
+
+def test_ec2_not_on_ec2_has_account_key(mocker):
+    # Even off-EC2, the key must exist so downstream code/labels never KeyError.
+    mocker.patch("requests.put", side_effect=Exception("connection refused"))
+    snap = EC2Collector(timeout=1).collect()
+    assert snap.metrics["aws_account_id"] == ""

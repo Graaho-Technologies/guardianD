@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import Dict, List, Optional
 
-from ..alerter.base import Alert, AlertSeverity, make_fingerprint
+from ..alerter.base import Alert, AlertSeverity, make_fingerprint, resolve_account
 from ..collector.base import MetricSnapshot
 from ..config.schema import GuardianConfig
 from ..utils.logger import get_logger
@@ -56,6 +56,7 @@ class AnomalyDetector:
         alerts: List[Alert] = []
         t = self.config.thresholds
         iid = _instance_id(snapshots)
+        acct_id, acct_name = resolve_account(self.config, snapshots)
 
         for metric_path in self.MONITORED_METRICS:
             parts = metric_path.split('.')
@@ -129,6 +130,8 @@ class AnomalyDetector:
                 instance_id=iid,
                 instance_name=self.config.instance_name or iid,
                 environment=self.config.environment,
+                aws_account_id=acct_id,
+                aws_account_name=acct_name,
                 timestamp=time.time(),
                 fingerprint=make_fingerprint("intelligence", title),
                 anomaly_score=round(z, 3),

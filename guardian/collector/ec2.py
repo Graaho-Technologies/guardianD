@@ -64,7 +64,7 @@ class EC2Collector(BaseCollector):
                     collector_name=self.name,
                     timestamp=ts,
                     metrics={
-                        "is_ec2": False,
+                        "is_ec2": False, "aws_account_id": "",
                         "instance_id": "", "instance_type": "",
                         "availability_zone": "", "region": "",
                         "ami_id": "", "public_ip": "", "private_ip": "",
@@ -82,6 +82,21 @@ class EC2Collector(BaseCollector):
             az = g("/latest/meta-data/placement/availability-zone")
             if not region_raw and az:
                 region_raw = az[:-1] if az else ""
+
+            # AWS account ID comes from the signed instance-identity document
+            # (not exposed as a plain meta-data key). Region also lives here as
+            # a fallback if the placement endpoints were unavailable.
+            account_id = ""
+            doc_raw = self._get("/latest/dynamic/instance-identity/document", token)
+            if doc_raw:
+                import json
+                try:
+                    doc = json.loads(doc_raw)
+                    account_id = str(doc.get("accountId", "") or "")
+                    if not region_raw:
+                        region_raw = str(doc.get("region", "") or "")
+                except Exception:
+                    pass
 
             spot_info = {"scheduled": False, "action": "", "notice_time": ""}
             if self.spot_check:
@@ -118,6 +133,7 @@ class EC2Collector(BaseCollector):
 
             metrics = {
                 "is_ec2": True,
+                "aws_account_id": account_id,
                 "instance_id": g("/latest/meta-data/instance-id"),
                 "instance_type": g("/latest/meta-data/instance-type"),
                 "availability_zone": az,
@@ -138,7 +154,8 @@ class EC2Collector(BaseCollector):
             return MetricSnapshot(
                 collector_name=self.name, timestamp=ts,
                 metrics={
-                    "is_ec2": False, "instance_id": "", "instance_type": "",
+                    "is_ec2": False, "aws_account_id": "",
+                    "instance_id": "", "instance_type": "",
                     "availability_zone": "", "region": "", "ami_id": "",
                     "public_ip": "", "private_ip": "", "hostname": "",
                     "iam_role": "", "instance_lifecycle": "",
